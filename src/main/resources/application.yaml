@@ -1,0 +1,31 @@
+spring:
+  application:
+    name: unispace-backend
+  datasource:
+    url: ${unispace.database.jdbc-url}
+    username: ${DB_USERNAME}
+    password: ${DB_PASSWORD}
+    hikari:
+      transaction-isolation: TRANSACTION_REPEATABLE_READ
+  jpa:
+    hibernate:
+      ddl-auto: validate
+    open-in-view: false
+    properties:
+      hibernate.jdbc.time_zone: UTC
+      hibernate.type.java_time_use_direct_jdbc: true
+  flyway:
+    enabled: ${DB_MIGRATIONS_ENABLED:false}
+    clean-disabled: true
+  sql:
+    init:
+      mode: never
+
+unispace:
+  database:
+    host: ${DB_HOST:localhost}
+    port: ${DB_PORT:3306}
+    name: ${DB_NAME:unispace}
+    auto-create: ${DB_AUTO_CREATE:false}
+    ssl-mode: ${DB_SSL_MODE:VERIFY_IDENTITY}
+    jdbc-url: "jdbc:mysql://${unispace.database.host}:${unispace.database.port}/${unispace.database.name}?createDatabaseIfNotExist=${unispace.database.auto-create}&sslMode=${unispace.database.ssl-mode}&connectionTimeZone=%2B00:00&forceConnectionTimeZoneToSession=true"

@@ -1,0 +1,22 @@
+# Automatically detect text files
+* text=auto
+
+# Unix/Linux and Docker
+/mvnw text eol=lf
+*.sh text eol=lf
+Dockerfile text eol=lf
+.dockerignore text eol=lf
+
+# Configuration and SQL
+.env.example text eol=lf
+*.sql text eol=lf
+*.yaml text eol=lf
+*.yml text eol=lf
+*.properties text eol=lf
+
+# Documentation
+*.md text eol=lf
+
+# Windows scripts
+*.bat text eol=crlf
+*.cmd text eol=crlf
