@@ -185,6 +185,30 @@ class UnispaceBackendApplicationTests {
     }
 
     @Test
+    void preservesSwitchHistoryWhenItsSourceChannelIsDeleted() {
+        jdbc.update("""
+                INSERT INTO membership_requests
+                    (id, requester_user_id, source_channel_id, source_channel_id_snapshot,
+                     target_channel_id, target_channel_id_snapshot, request_type, status, requested_at)
+                VALUES (41, 1, 11, 11, 12, 12, 'SWITCH', 'PENDING', UTC_TIMESTAMP(6))
+                """);
+        assertSqlError(3819, "UPDATE membership_requests SET source_channel_id_snapshot = 12 WHERE id = 41");
+        assertSqlError(3819, "UPDATE membership_requests SET target_channel_id_snapshot = 11 WHERE id = 41");
+        jdbc.update("UPDATE membership_requests SET status = 'CANCELLED' WHERE id = 41");
+
+        assertSqlError(1451, "DELETE FROM channels WHERE id = 11");
+        jdbc.update("UPDATE membership_requests SET source_channel_id = NULL WHERE id = 41");
+
+        assertThat(jdbc.update("DELETE FROM channels WHERE id = 11")).isEqualTo(1);
+        assertThat(jdbc.queryForObject("""
+                SELECT COUNT(*) FROM membership_requests
+                WHERE id = 41 AND status = 'CANCELLED'
+                  AND source_channel_id IS NULL AND source_channel_id_snapshot = 11
+                  AND target_channel_id = 12 AND target_channel_id_snapshot = 12
+                """, Integer.class)).isEqualTo(1);
+    }
+
+    @Test
     void distinguishesOpaqueIdentifiersAndEnforcesCaseInsensitiveNames() {
         assertSqlError(1062, "UPDATE channels SET name_normalized = 'FIRST' WHERE id = 12");
         String provider = """
@@ -270,6 +294,119 @@ class UnispaceBackendApplicationTests {
         assertThat(policy.updatedAt).isEqualTo(timestamp);
     }
 
+    @Test
+    void transfersOwnershipAndKeepsTheEmptyChannelAfterTheLastMemberLeaves() {
+        jdbc.update("""
+                INSERT INTO channel_memberships (user_id, channel_id, joined_at)
+                VALUES (1, 11, UTC_TIMESTAMP(6)), (2, 11, UTC_TIMESTAMP(6))
+                """);
+        jdbc.update("UPDATE channels SET owner_user_id = 1 WHERE id = 11");
+        assertSqlError(1451, "DELETE FROM channel_memberships WHERE user_id = 1");
+        jdbc.update("UPDATE channels SET owner_user_id = 2 WHERE id = 11");
+        assertThat(jdbc.update("DELETE FROM channel_memberships WHERE user_id = 1")).isEqualTo(1);
+        assertSqlError(1451, "DELETE FROM channel_memberships WHERE user_id = 2");
+        jdbc.update("UPDATE channels SET owner_user_id = NULL WHERE id = 11");
+        assertThat(jdbc.update("DELETE FROM channel_memberships WHERE user_id = 2")).isEqualTo(1);
+        assertThat(jdbc.queryForObject("""
+                SELECT COUNT(*) FROM channels c WHERE c.id = 11 AND c.owner_user_id IS NULL
+                  AND NOT EXISTS (SELECT 1 FROM channel_memberships m WHERE m.channel_id = c.id)
+                """, Integer.class)).isEqualTo(1);
+    }
+
+    @Test
+    void retainsRestoreChannelUntilTheTombstoneIsDetached() {
+        addFile(21, "Lecture.pdf", "TRASHED", "storage/lecture");
+        jdbc.update("UPDATE files SET restore_channel_id = channel_id WHERE id = 21");
+        jdbc.update("""
+                UPDATE files SET status = 'DELETED', deleted_at = UTC_TIMESTAMP(6), channel_id = NULL
+                WHERE id = 21
+                """);
+        assertSqlError(1451, "DELETE FROM channels WHERE id = 11");
+        jdbc.update("UPDATE files SET restore_channel_id = NULL WHERE id = 21");
+        assertThat(jdbc.update("DELETE FROM channels WHERE id = 11")).isEqualTo(1);
+        assertThat(jdbc.queryForObject("SELECT storage_key FROM files WHERE id = 21", String.class))
+                .isEqualTo("storage/lecture");
+    }
+
+    @Test
+    void allowsTheSameActiveFilenameInDifferentChannels() {
+        addFile(21, "Lecture.pdf", "ACTIVE", "storage/first");
+        jdbc.update("UPDATE files SET channel_id = 12 WHERE id = 21");
+        addFile(22, "lecture.pdf", "ACTIVE", "storage/second");
+        assertThat(jdbc.queryForList("""
+                SELECT channel_id FROM files WHERE status = 'ACTIVE' AND active_filename = 'lecture.pdf'
+                """, Long.class)).containsExactlyInAnyOrder(11L, 12L);
+        assertSqlError(1062, "UPDATE files SET channel_id = 12 WHERE id = 22");
+    }
+
+    @Test
+    void preservesAuditAttributionWhenDeletingAUser() {
+        // User 2 has no channel or file references in the shared fixture.
+        jdbc.update("""
+                INSERT INTO audit_events (actor_user_id, action, target_type, details, occurred_at, retention_until)
+                VALUES (2, 'CHANNEL_RENAMED', 'CHANNEL', JSON_OBJECT(), UTC_TIMESTAMP(6),
+                        UTC_TIMESTAMP(6) + INTERVAL 365 DAY)
+                """);
+        assertSqlError(1451, "DELETE FROM users WHERE id = 2");
+        assertThat(jdbc.queryForObject("SELECT actor_user_id FROM audit_events", Long.class)).isEqualTo(2L);
+    }
+
+    @Test
+    void rejectsReuseOfACurrentRefreshHashAcrossUsers() {
+        String insertSession = """
+                INSERT INTO auth_sessions (user_id, refresh_token_hash, created_at, expires_at)
+                VALUES (?, REPEAT(?, 64), UTC_TIMESTAMP(6), UTC_TIMESTAMP(6) + INTERVAL 1 DAY)
+                """;
+        jdbc.update(insertSession, 1, "a");
+        assertSqlError(1062, insertSession, 2, "a");
+        assertThat(jdbc.update(insertSession, 2, "b")).isEqualTo(1);
+    }
+
+    @Test
+    void allowsProvisionalNullIdentifiersAndEnforcesEachPopulatedIdentifier() {
+        assertThat(jdbc.queryForList("""
+                SELECT id FROM users WHERE student_id_normalized IS NULL AND email_normalized IS NULL
+                """, Long.class)).containsExactlyInAnyOrder(1L, 2L);
+        jdbc.update("""
+                UPDATE users SET student_id_normalized = 'student-01', email_normalized = 'first@example.edu'
+                WHERE id = 1
+                """);
+        assertSqlError(1062, "UPDATE users SET student_id_normalized = 'student-01' WHERE id = 2");
+        assertSqlError(1062, "UPDATE users SET email_normalized = 'first@example.edu' WHERE id = 2");
+        assertThat(jdbc.update("""
+                UPDATE users SET student_id_normalized = 'student-02', email_normalized = 'second@example.edu'
+                WHERE id = 2
+                """)).isEqualTo(1);
+    }
+
+    @Test
+    void deduplicatesNotificationDeliveryPerRecipient() {
+        String insertNotification = """
+                INSERT INTO notifications (user_id, event_key, category, notification_type, payload, created_at, expires_at)
+                VALUES (?, 'decision-1', 'CHANNEL_REQUESTS', 'REQUEST_DECIDED', JSON_OBJECT(),
+                        UTC_TIMESTAMP(6), UTC_TIMESTAMP(6) + INTERVAL 90 DAY)
+                """;
+        jdbc.update(insertNotification, 1);
+        assertSqlError(1062, insertNotification, 1);
+        assertThat(jdbc.update(insertNotification, 2)).isEqualTo(1);
+    }
+
+    @Test
+    void deduplicatesOutboxEventsOnlyWhenAKeyIsSupplied() {
+        String insertEvent = """
+                INSERT INTO outbox_events (event_type, aggregate_type, aggregate_id, event_version, payload,
+                    status, attempt_count, next_attempt_at, deduplication_key, created_at)
+                VALUES ('REQUEST_DECIDED', 'REQUEST', '41', 1, JSON_OBJECT(), 'PENDING', 0,
+                        UTC_TIMESTAMP(6), ?, UTC_TIMESTAMP(6))
+                """;
+        jdbc.update(insertEvent, "decision-1");
+        assertSqlError(1062, insertEvent, "decision-1");
+        jdbc.update(insertEvent, (String) null);
+        jdbc.update(insertEvent, (String) null);
+        assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM outbox_events WHERE deduplication_key IS NULL",
+                Integer.class)).isEqualTo(2);
+    }
+
     @BeforeEach
     void insertUsersAndChannels() {
         jdbc.update("""
@@ -292,8 +429,8 @@ class UnispaceBackendApplicationTests {
                 """, id, filename, filename, storageKey, status);
     }
 
-    private void assertSqlError(int errorCode, String sql) {
-        assertThatThrownBy(() -> jdbc.update(sql)).rootCause().isInstanceOfSatisfying(
+    private void assertSqlError(int errorCode, String sql, Object... args) {
+        assertThatThrownBy(() -> jdbc.update(sql, args)).rootCause().isInstanceOfSatisfying(
                 SQLException.class, exception -> assertThat(exception.getErrorCode()).isEqualTo(errorCode));
     }
 
