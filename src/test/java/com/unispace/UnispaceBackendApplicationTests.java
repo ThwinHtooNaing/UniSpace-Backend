@@ -27,7 +27,7 @@ import org.testcontainers.mysql.MySQLContainer;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
-@SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.NONE)
+@SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.NONE, properties = "spring.flyway.target=1")
 @ActiveProfiles("test")
 @EnabledIfSystemProperty(named = "unispace.mysql.tests", matches = "true")
 @Testcontainers

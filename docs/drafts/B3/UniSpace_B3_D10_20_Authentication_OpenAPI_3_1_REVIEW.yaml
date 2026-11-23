@@ -1,0 +1,1281 @@
+openapi: 3.1.0
+jsonSchemaDialect: https://json-schema.org/draft/2020-12/schema
+info:
+  title: UniSpace — B3 Authentication API
+  version: 0.2.0-review
+  description: |
+    B3-I02 review candidate incorporating approved D10.25–D10.28. The 14 mobile operations describe
+    the proposed authentication contract within 167 approved FRs and Stage 4.3 Group A v0.2. Wire details require
+    final review. Google is first. Apple sign-in and linking contracts are retained for later live integration.
+    The Android Apple browser handoff is deferred. No callback is included in this mobile inventory.
+    Spring Security checks the current account, session or restricted flow, and required permissions.
+    Use TLS and Cache-Control no-store on token responses. Keep credentials and OTPs out of logs.
+servers:
+- url: /api/v1
+  description: Relative API prefix; origin configured per environment.
+tags:
+- name: Provider authentication
+- name: Onboarding
+- name: Device security
+- name: Sessions
+- name: Provider linking
+security: []
+paths:
+  /auth/challenges:
+    post:
+      tags:
+      - Provider authentication
+      operationId: createAuthChallenge
+      summary: Issue one-time challenge for Google/Apple sign-in or provider-linking
+      description: SIGN_IN is public (no access JWT required). LINK_PROVIDER requires an ACTIVE access JWT and
+        must bind provider, purpose, user, current session and nonce. 5-minute single-use challenge with >=256 bits entropy.
+        With SIGN_IN, omit Authorization.
+      responses:
+        '201':
+          description: Success.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuthChallengeResponse'
+          headers:
+            Cache-Control:
+              description: Use no-store for secret-bearing responses; recommended generally for auth data.
+              schema:
+                type: string
+              example: no-store
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AuthChallengeRequest'
+      security:
+      - accessJwt: []
+      - {}
+      x-unispace-error-codes:
+      - AUTH_CHALLENGE_RATE_LIMITED
+      - VALIDATION_FAILED
+      - AUTHENTICATION_REQUIRED
+      x-unispace-conditional-security: SIGN_IN = anonymous; LINK_PROVIDER = ACTIVE access JWT only. OpenAPI
+        alternatives cannot encode body-dependent security.
+  /auth/provider-exchange:
+    post:
+      tags:
+      - Provider authentication
+      operationId: exchangeProviderIdentity
+      summary: Verify Google or native Apple credential and continue authentication flow
+      description: Verify issuer, audience, expiry, provider signature, nonce/state binding, server-issued challenge
+        and immutable (provider,sub) for a SIGN_IN challenge. Consume challenge atomically. Return only restricted flow JWT; full session
+        awaits device check. Never merge by email. Android Apple browser-flow callback/handoff is NOT finalized
+        and cannot simply be treated as native ID-token payload.
+      responses:
+        '200':
+          description: Success.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuthFlowResponse'
+          headers:
+            Cache-Control:
+              description: Use no-store for secret-bearing responses; recommended generally for auth data.
+              schema:
+                type: string
+              example: no-store
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ProviderExchangeRequest'
+      security: &id003 []
+      x-unispace-error-codes:
+      - AUTH_PROVIDER_INVALID
+      - AUTH_CHALLENGE_INVALID_OR_EXPIRED
+      - AUTH_NONCE_MISMATCH
+      - ACCOUNT_DISABLED
+      - AUTH_PROVIDER_UNAVAILABLE
+      x-unispace-deferred: Live Apple integration and its Android browser handoff require later review.
+  /me/onboarding:
+    get:
+      tags:
+      - Onboarding
+      operationId: getOnboarding
+      summary: Read saved onboarding status
+      description: Only current provisional user and only appropriate restricted-flow scope. Server-side progress
+        must persist beyond temporary JWT expiry. Reinstall during incomplete registration restarts UI onboarding
+        after provider reauthentication; safely reconcile provisional record.
+      responses:
+        '200':
+          description: Success.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OnboardingResponse'
+          headers:
+            Cache-Control:
+              description: Use no-store for secret-bearing responses; recommended generally for auth data.
+              schema:
+                type: string
+              example: no-store
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+      security: &id001
+      - flowJwt: []
+      x-unispace-error-codes:
+      - AUTH_FLOW_EXPIRED
+      - ACCESS_DENIED
+  /me/onboarding/profile:
+    put:
+      tags:
+      - Onboarding
+      operationId: updateOnboardingProfile
+      summary: Save personal details and Student ID
+      description: Validate required names and Admin-configured Student ID uniqueness/format. Never erase unrelated
+        valid data on a field validation failure. Do not accept role/status/verified as writable fields.
+      responses:
+        '200':
+          description: Success.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OnboardingResponse'
+          headers:
+            Cache-Control:
+              description: Use no-store for secret-bearing responses; recommended generally for auth data.
+              schema:
+                type: string
+              example: no-store
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ProfileUpdateRequest'
+      security: *id001
+      x-unispace-error-codes:
+      - VALIDATION_FAILED
+      - STUDENT_ID_INVALID
+      - STUDENT_ID_CONFLICT
+      - AUTH_FLOW_EXPIRED
+  /me/university-email/challenges:
+    post:
+      tags:
+      - Onboarding
+      operationId: createUniversityEmailChallenge
+      summary: Send or resend university email registration OTP
+      description: Only valid institution domain; 10-minute OTP lifetime, resend cooldown 60s, five failed attempts
+        invalidate code, replacement invalidates prior OTP. Mailing service configurable; real OTP must not
+        be returned by API.
+      responses:
+        '201':
+          description: Success.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OtpChallengeResponse'
+          headers:
+            Cache-Control:
+              description: Use no-store for secret-bearing responses; recommended generally for auth data.
+              schema:
+                type: string
+              example: no-store
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UniversityEmailChallengeRequest'
+      security: *id001
+      x-unispace-error-codes:
+      - EMAIL_DOMAIN_NOT_ALLOWED
+      - OTP_RATE_LIMITED
+      - EMAIL_SERVICE_UNAVAILABLE
+  /me/university-email/verify:
+    post:
+      tags:
+      - Onboarding
+      operationId: verifyUniversityEmailOtp
+      summary: Verify registration email and continue initial device enrollment
+      description: OTP is single-use. Successful registration OTP establishes eligibility for initial device
+        enrollment; no second new-device OTP. Mark ACTIVE only if profile plus email validation complete. Do
+        not return full session until device possession check succeeds.
+      responses:
+        '200':
+          description: Success.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OtpVerifiedResponse'
+          headers:
+            Cache-Control:
+              description: Use no-store for secret-bearing responses; recommended generally for auth data.
+              schema:
+                type: string
+              example: no-store
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/OtpVerifyRequest'
+      security: *id001
+      x-unispace-error-codes:
+      - OTP_INVALID
+      - OTP_EXPIRED
+      - OTP_ATTEMPTS_EXCEEDED
+      - AUTH_FLOW_EXPIRED
+  /auth/device-challenges:
+    post:
+      tags:
+      - Device security
+      operationId: createDeviceChallenge
+      summary: Begin existing-device proof or new-device verification
+      description: 'Server decides whether device has a trusted key, needs email OTP, or can proceed directly
+        to key registration after registration OTP. Trusted proof challenge: 2 minutes. New-device OTP sent
+        only to previously verified university email, 10 minutes, 60s resend cooldown. An optional deviceId
+        is never sufficient authentication proof.'
+      responses:
+        '201':
+          description: Success.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DeviceChallengeResponse'
+          headers:
+            Cache-Control:
+              description: Use no-store for secret-bearing responses; recommended generally for auth data.
+              schema:
+                type: string
+              example: no-store
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/DeviceChallengeRequest'
+      security: *id001
+      x-unispace-error-codes:
+      - DEVICE_TRUST_REVOKED
+      - OTP_RATE_LIMITED
+      - AUTH_FLOW_EXPIRED
+      - EMAIL_SERVICE_UNAVAILABLE
+  /auth/device-challenges/{id}/verify-otp:
+    post:
+      tags:
+      - Device security
+      operationId: verifyDeviceOtp
+      summary: Verify OTP for existing user on new/untrusted device
+      description: Use the enrollment challengeId from createDeviceChallenge as {id}. The server binds the OTP to the user and flow. On success reuse that enrollment ID for register-key. Five failed attempts,
+        single use and replacement invalidation. First-registration flow does not call this endpoint.
+      responses:
+        '200':
+          description: Success.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DeviceOtpVerifiedResponse'
+          headers:
+            Cache-Control:
+              description: Use no-store for secret-bearing responses; recommended generally for auth data.
+              schema:
+                type: string
+              example: no-store
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/DeviceOtpVerifyRequest'
+      security: *id001
+      parameters: &id002
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+          minLength: 1
+          maxLength: 128
+        description: Server-issued device challenge identifier; bound to current restricted auth-flow.
+      x-unispace-error-codes:
+      - OTP_INVALID
+      - OTP_EXPIRED
+      - OTP_ATTEMPTS_EXCEEDED
+      - DEVICE_CHALLENGE_INVALID
+  /auth/device-challenges/{id}/register-key:
+    post:
+      tags:
+      - Device security
+      operationId: registerDeviceKey
+      summary: Submit P-256 public key after completed required verification
+      description: Use the enrollment challengeId as {id}. Validate the public JWK and compute its RFC 7638 SHA-256 thumbprint. Return a fresh signature challengeId for verify-proof. The submitted key stays pending until proof succeeds. Keep
+        private key in Android Keystore / Apple secure key storage. Hardware attestation is deferred from MVP.
+        No key overwrite from device metadata alone.
+      responses:
+        '200':
+          description: Success.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DeviceKeyRegisterResponse'
+          headers:
+            Cache-Control:
+              description: Use no-store for secret-bearing responses; recommended generally for auth data.
+              schema:
+                type: string
+              example: no-store
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/DeviceKeyRegisterRequest'
+      security: *id001
+      parameters: *id002
+      x-unispace-error-codes:
+      - DEVICE_VERIFICATION_REQUIRED
+      - DEVICE_KEY_INVALID
+      - DEVICE_CHALLENGE_INVALID
+  /auth/device-challenges/{id}/verify-proof:
+    post:
+      tags:
+      - Device security
+      operationId: verifyDeviceProof
+      summary: Verify ECDSA device signature and issue full session
+      description: Verify base64url DER SHA256withECDSA signature over exact 2-minute single-use server challenge,
+        bound to the user, flow, RFC 7638 key thumbprint and operation (enrollment or trusted-device sign-in).
+        Use the signature challengeId from register-key or the trusted proof branch of createDeviceChallenge.
+        Sign the decoded payloadToSign bytes exactly as supplied by the server. Consume the challenge once and
+        issue the authenticated session and deviceId only after all checks succeed. Includes existing trusted devices reauthenticating after session
+        expiry.
+      responses:
+        '200':
+          description: Success.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SessionResponse'
+          headers:
+            Cache-Control:
+              description: Use no-store for secret-bearing responses; recommended generally for auth data.
+              schema:
+                type: string
+              example: no-store
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/DeviceProofRequest'
+      security: *id001
+      parameters: *id002
+      x-unispace-error-codes:
+      - DEVICE_SIGNATURE_INVALID
+      - DEVICE_CHALLENGE_INVALID_OR_EXPIRED
+      - DEVICE_TRUST_REVOKED
+  /auth/refresh:
+    post:
+      tags:
+      - Sessions
+      operationId: refreshSession
+      summary: Atomically rotate refresh token and renew access session
+      description: |
+        Verify the body credential and current account, session and trust. On success atomically record the
+        spent digest, rotate the opaque secret and renew 30-day sliding inactivity. Every recognized reuse,
+        including an immediate duplicate or retry after a lost response, rejects the request and revokes
+        the entire affected session/token family including its successor. Other devices' families remain valid.
+        Clients serialize refresh requests. A replay is terminal for this family.
+      responses:
+        '200':
+          description: Success.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SessionResponse'
+          headers:
+            Cache-Control:
+              description: Use no-store for secret-bearing responses; recommended generally for auth data.
+              schema:
+                type: string
+              example: no-store
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/RefreshUnauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RefreshRequest'
+      security: *id003
+      x-unispace-error-codes:
+      - REFRESH_INVALID
+      - SESSION_EXPIRED
+      - SESSION_REVOKED
+      - REFRESH_TOKEN_REUSED
+      - ACCOUNT_DISABLED
+  /auth/sign-out:
+    post:
+      tags:
+      - Sessions
+      operationId: signOutCurrentDevice
+      summary: Revoke current authenticated session and current-device trust
+      description: |
+        A valid access JWT authorizes revocation of its current session and current-device trust. After
+        access expiry, omit the expired bearer and send the current refresh credential in the body.
+        Verify the credential and its session before revocation. This fallback issues no tokens.
+        Return 204 only after confirming both revocations. Missing, expired, invalid or revoked credentials
+        alone cannot confirm sign-out. Recognized refresh reuse follows D10.27. Flutter clears local
+        protected state even when offline and reports server revocation only after confirmation.
+      responses:
+        '204':
+          description: Current session and current-device trust revocation confirmed.
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/SignOutUnauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SignOutRequest'
+      security:
+      - accessJwt: []
+      - {}
+      x-unispace-error-codes:
+      - AUTHENTICATION_REQUIRED
+      - REFRESH_INVALID
+      - SESSION_EXPIRED
+      - SESSION_REVOKED
+      - REFRESH_TOKEN_REUSED
+      x-unispace-conditional-security: Require validated current access JWT OR current session refresh token;
+        OpenAPI cannot directly express body-credential security alternative.
+  /me/linked-providers:
+    get:
+      tags:
+      - Provider linking
+      operationId: getLinkedProviders
+      summary: View own linked Google and Apple sign-in providers
+      description: 'User-safe provider statuses only. Flutter route: Profile → Settings → Security → Linked
+        Sign-In Providers.'
+      responses:
+        '200':
+          description: Success.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LinkedProvidersResponse'
+          headers:
+            Cache-Control:
+              description: Use no-store for secret-bearing responses; recommended generally for auth data.
+              schema:
+                type: string
+              example: no-store
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+      security: &id004
+      - accessJwt: []
+      x-unispace-error-codes:
+      - AUTHENTICATION_REQUIRED
+      - ACCESS_DENIED
+    post:
+      tags:
+      - Provider linking
+      operationId: linkProvider
+      summary: Link second Google/Apple identity after new provider proof
+      description: Must use a purpose LINK_PROVIDER challenge bound to current ACTIVE session and provide new
+        provider proof. Uniquely associate (provider,sub), preserving user ID, role, memberships and data. Never
+        merge based on email. Do not expose unlink endpoint.
+      responses:
+        '200':
+          description: Success.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LinkedProvidersResponse'
+          headers:
+            Cache-Control:
+              description: Use no-store for secret-bearing responses; recommended generally for auth data.
+              schema:
+                type: string
+              example: no-store
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/LinkProviderRequest'
+      security: *id004
+      x-unispace-error-codes:
+      - AUTH_CHALLENGE_INVALID_OR_EXPIRED
+      - PROVIDER_IDENTITY_CONFLICT
+      - PROVIDER_ALREADY_LINKED
+      - AUTH_PROVIDER_INVALID
+components:
+  securitySchemes:
+    accessJwt:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: 20-minute UniSpace ACTIVE access JWT; enforce current account/session and permissions on
+        every protected request.
+    flowJwt:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: 15-minute restricted flow JWT with distinct audience and purpose. Verify current user, live flow,
+        allowed step and resource binding on each request. No refresh credential or full application access.
+  schemas:
+    Provider:
+      type: string
+      enum:
+      - GOOGLE
+      - APPLE
+    OnboardingState:
+      type: object
+      oneOf:
+      - properties:
+          accountStatus: {const: PENDING_PROFILE}
+          nextAction: {const: PROFILE_REQUIRED}
+      - properties:
+          accountStatus: {const: PENDING_EMAIL_VERIFICATION}
+          nextAction: {enum: [EMAIL_REQUIRED, EMAIL_VERIFICATION_REQUIRED]}
+      required: [accountStatus, nextAction]
+    DeviceId:
+      type: string
+      minLength: 1
+      maxLength: 128
+      description: Opaque server-issued handle for the current verified device. A handle alone grants no trust.
+    AuthFlowResponse:
+      type: object
+      properties:
+        status: {type: string}
+        accountStatus: {type: string}
+        nextAction: {type: string}
+        flowToken:
+          type: string
+          description: Restricted RS256 JWT, 15 minutes. Never accepted by full application APIs.
+          minLength: 1
+        expiresInSeconds:
+          type: integer
+          const: 900
+      additionalProperties: false
+      required:
+      - status
+      - accountStatus
+      - nextAction
+      - flowToken
+      - expiresInSeconds
+      oneOf:
+      - allOf:
+        - $ref: '#/components/schemas/OnboardingState'
+        - properties:
+            status: {const: ONBOARDING_REQUIRED}
+      - properties:
+          status: {const: DEVICE_VERIFICATION_REQUIRED}
+          accountStatus: {const: ACTIVE}
+          nextAction: {enum: [DEVICE_PROOF_REQUIRED, DEVICE_OTP_REQUIRED, DEVICE_KEY_REGISTRATION_REQUIRED]}
+      description: Restricted credential only. ACTIVE may still require device verification before session issuance.
+    SessionResponse:
+      type: object
+      properties:
+        status:
+          type: string
+          const: AUTHENTICATED
+        accountStatus:
+          type: string
+          const: ACTIVE
+        nextAction:
+          type: string
+          const: READY
+        deviceId:
+          $ref: '#/components/schemas/DeviceId'
+        accessToken:
+          type: string
+          description: UniSpace RS256 access JWT (20 minutes).
+          minLength: 1
+        expiresInSeconds:
+          type: integer
+          const: 1200
+        refreshToken:
+          type: string
+          description: New opaque refresh secret; do not log or cache.
+          minLength: 1
+        refreshExpiresAt:
+          type: string
+          description: 30-day sliding inactivity expiry after this successful session creation/refresh.
+          format: date-time
+      additionalProperties: false
+      required:
+      - status
+      - accountStatus
+      - nextAction
+      - deviceId
+      - accessToken
+      - expiresInSeconds
+      - refreshToken
+      - refreshExpiresAt
+      description: 'Returned after successful proof or refresh. Persist the deviceId issued on proof and returned again on refresh for later device challenges. Cache-Control: no-store.'
+    AuthChallengeRequest:
+      type: object
+      properties:
+        provider:
+          $ref: '#/components/schemas/Provider'
+        purpose:
+          type: string
+          enum:
+          - SIGN_IN
+          - LINK_PROVIDER
+          default: SIGN_IN
+          description: LINK_PROVIDER requires an ACTIVE JWT; not interchangeable with SIGN_IN.
+      additionalProperties: false
+      required:
+      - provider
+      description: Challenge purpose is operationally bound server-side. Purpose field is D10.18B working refinement.
+    AuthChallengeResponse:
+      type: object
+      properties:
+        challengeId:
+          type: string
+          description: Opaque server-issued one-time identifier.
+          minLength: 1
+          maxLength: 128
+        nonce:
+          type: string
+          description: Cryptographically secure, >=256-bit server-generated nonce; use according to provider-specific
+            mechanism.
+          minLength: 43
+        expiresAt:
+          type: string
+          format: date-time
+      additionalProperties: false
+      required:
+      - challengeId
+      - nonce
+      - expiresAt
+      description: Five-minute lifetime; no authorization granted.
+    GoogleProviderExchangeRequest:
+      type: object
+      properties:
+        provider:
+          type: string
+          const: GOOGLE
+        challengeId:
+          type: string
+          minLength: 1
+          maxLength: 128
+        idToken:
+          type: string
+          description: Google ID token containing expected audience and nonce as supported by chosen SDK.
+          minLength: 1
+      additionalProperties: false
+      required:
+      - provider
+      - challengeId
+      - idToken
+    AppleNativeProviderExchangeRequest:
+      type: object
+      properties:
+        provider:
+          type: string
+          const: APPLE
+        challengeId:
+          type: string
+          minLength: 1
+          maxLength: 128
+        idToken:
+          type: string
+          description: Apple identity JWT; expected nonce/iss/aud/exp are verified server-side.
+          minLength: 1
+        authorizationCode:
+          type: string
+          description: Apple one-time code for server-side verification/exchange where required.
+          minLength: 1
+      additionalProperties: false
+      required:
+      - provider
+      - challengeId
+      - idToken
+      - authorizationCode
+      description: iOS native Apple flow only. Android browser callback and server-to-app handoff are a separate
+        unresolved integration contract.
+    ProviderExchangeRequest:
+      oneOf: &id005
+      - $ref: '#/components/schemas/GoogleProviderExchangeRequest'
+      - $ref: '#/components/schemas/AppleNativeProviderExchangeRequest'
+      discriminator: &id006
+        propertyName: provider
+        mapping:
+          GOOGLE: '#/components/schemas/GoogleProviderExchangeRequest'
+          APPLE: '#/components/schemas/AppleNativeProviderExchangeRequest'
+    OnboardingProfile:
+      type: object
+      properties:
+        firstName:
+          type: string
+        lastName:
+          type: string
+        studentId:
+          type: string
+      additionalProperties: false
+      description: Previously saved safe profile fields; empty/absent fields depend on progress. Never echo
+        provider tokens.
+    OnboardingResponse:
+      type: object
+      allOf:
+      - $ref: '#/components/schemas/OnboardingState'
+      properties:
+        accountStatus: {type: string}
+        nextAction: {type: string}
+        profile:
+          $ref: '#/components/schemas/OnboardingProfile'
+        universityEmailMasked:
+          type: string
+          description: Only if previously supplied; never expose arbitrary other-user email.
+      additionalProperties: false
+      required:
+      - accountStatus
+      - nextAction
+      description: Backend-authoritative onboarding progress for the authenticated provisional user.
+    ProfileUpdateRequest:
+      type: object
+      properties:
+        firstName:
+          type: string
+          description: Nonblank after trimming; final maximum length pending institutional UX/DB check.
+          minLength: 1
+        lastName:
+          type: string
+          description: Nonblank after trimming; final maximum length pending institutional UX/DB check.
+          minLength: 1
+        studentId:
+          type: string
+          description: String, not number; validate dynamically against Admin-configured format and uniqueness.
+          minLength: 1
+      additionalProperties: false
+      required:
+      - firstName
+      - lastName
+      - studentId
+    UniversityEmailChallengeRequest:
+      type: object
+      properties:
+        email:
+          type: string
+          description: University institutional email; allowlisted domain checked by server.
+          format: email
+          minLength: 3
+      additionalProperties: false
+      required:
+      - email
+    OtpChallengeResponse:
+      type: object
+      properties:
+        challengeId:
+          type: string
+          minLength: 1
+          maxLength: 128
+        maskedEmail:
+          type: string
+          description: Recipient with limited display of local part.
+        expiresInSeconds:
+          type: integer
+          const: 600
+        resendAfterSeconds:
+          type: integer
+          const: 60
+      additionalProperties: false
+      required:
+      - challengeId
+      - maskedEmail
+      - expiresInSeconds
+      - resendAfterSeconds
+      description: Server controls actual challenge expiry and resend eligibility. Resend invalidates old OTP.
+    OtpVerifyRequest:
+      type: object
+      properties:
+        challengeId:
+          type: string
+          minLength: 1
+          maxLength: 128
+        code:
+          type: string
+          description: OTP format/length deliberately pending; must not be logged.
+          minLength: 1
+      additionalProperties: false
+      required:
+      - challengeId
+      - code
+    OtpVerifiedResponse:
+      type: object
+      properties:
+        accountStatus:
+          type: string
+          const: ACTIVE
+        emailVerified:
+          type: boolean
+          const: true
+        nextAction:
+          type: string
+          const: DEVICE_KEY_REGISTRATION_REQUIRED
+      additionalProperties: false
+      required:
+      - accountStatus
+      - emailVerified
+      - nextAction
+      description: Profile and university email verified. The account is ACTIVE and the flow remains restricted.
+        Call createDeviceChallenge with {} to obtain the initial enrollment ID without a second OTP.
+    DeviceChallengeRequest:
+      type: object
+      properties:
+        deviceId:
+          $ref: '#/components/schemas/DeviceId'
+      additionalProperties: false
+      description: Supply the locally stored handle from SessionResponse when available. Otherwise send {}.
+        The server determines eligibility from the flow, including prior registration OTP verification.
+    DeviceChallengeResponse:
+      oneOf:
+      - $ref: '#/components/schemas/DeviceProofChallenge'
+      - type: object
+        additionalProperties: false
+        required: [challengeId, nextAction, maskedEmail, otpExpiresInSeconds, resendAfterSeconds]
+        properties:
+          challengeId: {type: string, minLength: 1, maxLength: 128}
+          nextAction: {const: DEVICE_OTP_REQUIRED}
+          maskedEmail: {type: string}
+          otpExpiresInSeconds: {const: 600}
+          resendAfterSeconds: {const: 60}
+        description: OTP sent to the stored verified university email. Use challengeId for verify-otp, then register-key.
+      - type: object
+        additionalProperties: false
+        required: [challengeId, nextAction]
+        properties:
+          challengeId: {type: string, minLength: 1, maxLength: 128}
+          nextAction: {const: DEVICE_KEY_REGISTRATION_REQUIRED}
+        description: Registration OTP already established eligibility. Use challengeId for register-key.
+    DeviceProofChallenge:
+      type: object
+      additionalProperties: false
+      required: [challengeId, nextAction, payloadToSign, expiresAt]
+      properties:
+        challengeId: {type: string, minLength: 1, maxLength: 128}
+        nextAction: {const: DEVICE_PROOF_REQUIRED}
+        payloadToSign:
+          type: string
+          minLength: 1
+          pattern: ^[A-Za-z0-9_-]+$
+          description: Base64url of canonical server-generated bytes. Decode once and sign those exact bytes.
+        expiresAt: {type: string, format: date-time}
+      description: Single-use two-minute challenge bound to user, auth flow, key thumbprint and operation.
+        Submit the signature to verify-proof using this challengeId.
+    DeviceOtpVerifyRequest:
+      type: object
+      properties:
+        code:
+          type: string
+          description: OTP format/length pending.
+          minLength: 1
+      additionalProperties: false
+      required:
+      - code
+    DeviceOtpVerifiedResponse:
+      type: object
+      properties:
+        nextAction:
+          type: string
+          const: DEVICE_KEY_REGISTRATION_REQUIRED
+      additionalProperties: false
+      required:
+      - nextAction
+    P256PublicJwk:
+      type: object
+      properties:
+        kty:
+          type: string
+          const: EC
+        crv:
+          type: string
+          const: P-256
+        x:
+          type: string
+          description: 32-byte coordinate encoded unpadded base64url.
+          minLength: 43
+          maxLength: 43
+          pattern: ^[A-Za-z0-9_-]{43}$
+        y:
+          type: string
+          description: 32-byte coordinate encoded unpadded base64url.
+          minLength: 43
+          maxLength: 43
+          pattern: ^[A-Za-z0-9_-]{43}$
+      additionalProperties: false
+      required:
+      - kty
+      - crv
+      - x
+      - y
+      description: Server validates the public P-256 point and computes the RFC 7638 SHA-256 thumbprint from crv, kty, x and y.
+    DeviceKeyRegisterRequest:
+      type: object
+      properties:
+        publicKeyJwk:
+          $ref: '#/components/schemas/P256PublicJwk'
+        deviceDescription:
+          type: string
+          description: Optional non-security display metadata (model/OS), not trusted authentication evidence.
+          maxLength: 160
+      additionalProperties: false
+      required:
+      - publicKeyJwk
+    DeviceKeyRegisterResponse:
+      $ref: '#/components/schemas/DeviceProofChallenge'
+      description: Pending key. Use the returned proof challengeId in verify-proof in place of the enrollment ID.
+    DeviceProofRequest:
+      type: object
+      properties:
+        signature:
+          type: string
+          description: Base64url of DER-encoded ECDSA P-256 SHA-256 signature over exact challenge payload.
+          minLength: 1
+          pattern: ^[A-Za-z0-9_-]+$
+      additionalProperties: false
+      required:
+      - signature
+    RefreshRequest:
+      type: object
+      properties:
+        refreshToken:
+          type: string
+          description: Current opaque high-entropy refresh token.
+          minLength: 1
+      additionalProperties: false
+      required:
+      - refreshToken
+    SignOutRequest:
+      type: object
+      properties:
+        refreshToken:
+          type: string
+          description: Current opaque refresh credential for sign-out after access expiry.
+          minLength: 1
+      additionalProperties: false
+      required: [refreshToken]
+      description: Omit the body when using the valid access JWT. Send the body alone for refresh fallback.
+    LinkedProviderItem:
+      type: object
+      properties:
+        provider:
+          $ref: '#/components/schemas/Provider'
+        linked:
+          type: boolean
+      additionalProperties: false
+      required:
+      - provider
+      - linked
+    LinkedProvidersResponse:
+      type: object
+      properties:
+        providers:
+          type: array
+          items:
+            $ref: '#/components/schemas/LinkedProviderItem'
+          minItems: 2
+          maxItems: 2
+          description: Return one item each for GOOGLE and APPLE; account ID/role must not change on linking.
+      additionalProperties: false
+      required:
+      - providers
+    LinkProviderRequest:
+      description: Same credential formats as exchange, but a LINK_PROVIDER challenge and a valid ACTIVE session
+        are required.
+      oneOf: *id005
+      discriminator: *id006
+    ValidationViolation:
+      type: object
+      properties:
+        field:
+          type: string
+        message:
+          type: string
+      additionalProperties: false
+      required:
+      - field
+      - message
+    Problem:
+      type: object
+      properties:
+        type:
+          type: string
+          description: Problem type URI, or about:blank.
+        title:
+          type: string
+        status:
+          type: integer
+          minimum: 400
+          maximum: 599
+        detail:
+          type: string
+          description: Safe human-readable explanation; not a machine-readable policy.
+        code:
+          type: string
+          minLength: 1
+          description: Stable machine-readable UniSpace code. Clients branch on code and HTTP status.
+        traceId:
+          type: string
+          minLength: 1
+          description: Opaque correlation ID safe to share with support.
+        violations:
+          type: array
+          items:
+            $ref: '#/components/schemas/ValidationViolation'
+      additionalProperties: false
+      required:
+      - type
+      - title
+      - status
+      - code
+      - traceId
+      description: RFC 9457 Problem Details. The status matches the HTTP response. Keep credentials and OTPs out of all fields.
+  responses:
+    BadRequest:
+      description: Invalid request or OTP (where applicable).
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+    Unauthorized:
+      description: Credential invalid, expired, or missing.
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+    RefreshUnauthorized:
+      description: |
+        REFRESH_INVALID identifies an unrecognized credential. SESSION_EXPIRED and SESSION_REVOKED identify
+        an unusable session. REFRESH_TOKEN_REUSED identifies a recognized spent credential and confirms family
+        revocation, including on an immediate duplicate. Reauthentication is required. No tokens are returned.
+      content:
+        application/problem+json:
+          schema:
+            allOf:
+            - $ref: '#/components/schemas/Problem'
+            - properties:
+                status: {const: 401}
+                code: {enum: [REFRESH_INVALID, SESSION_EXPIRED, SESSION_REVOKED, REFRESH_TOKEN_REUSED]}
+    SignOutUnauthorized:
+      description: |
+        AUTHENTICATION_REQUIRED covers missing or unusable bearer authentication. REFRESH_INVALID covers an
+        invalid fallback, SESSION_EXPIRED an expired session and SESSION_REVOKED a revoked session.
+        REFRESH_TOKEN_REUSED follows the same family revocation rule as refresh. A 401 does not confirm
+        revocation of current-device trust.
+      content:
+        application/problem+json:
+          schema:
+            allOf:
+            - $ref: '#/components/schemas/Problem'
+            - properties:
+                status: {const: 401}
+                code: {enum: [AUTHENTICATION_REQUIRED, REFRESH_INVALID, SESSION_EXPIRED, SESSION_REVOKED, REFRESH_TOKEN_REUSED]}
+    Forbidden:
+      description: Authenticated but not permitted; includes disabled/restricted account where applicable.
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+    Conflict:
+      description: Resource state conflict, consumed challenge or duplicate Student ID.
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+    TooManyRequests:
+      description: Rate-limited; Retry-After may be supplied.
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+    ServiceUnavailable:
+      description: Required service unavailable or revocation outcome could not be confirmed.
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+    InternalServerError:
+      description: Unexpected server error; no internal details exposed.
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+x-unispace-document-status: REVIEW DRAFT — not approved for implementation
+x-unispace-deferred:
+- DELETE /me/linked-providers/{provider}
+- admin-assisted lost-email recovery API
+- sign-out-all
+- remote session management
+- trusted-device management UI
+x-unispace-open-items:
+- Apple Android browser callback and one-time handoff
+- Exact provider credential/nonce variants by platform
+- DTO length and OTP format limits
+- Exact error code registry
+- Exact sign-out diagnostics for conflicting credentials and an unconfirmed server outcome
+- Refresh history retention and atomic replay-revocation evidence
+- Canonical signing-payload layout, platform vectors and device handle storage mapping
+- Flyway V2 changes if required
+- Device no-hardware-key fallback and enrollment recovery
+- Uniform OTP delivery resend behavior for device OTP
