@@ -1,0 +1,11 @@
+spring:
+  flyway:
+    enabled: true
+
+unispace:
+  database:
+    host: ${UNISPACE_TEST_DB_HOST}
+    port: ${UNISPACE_TEST_DB_PORT}
+    name: ${UNISPACE_TEST_DB_NAME}
+    auto-create: false
+    ssl-mode: REQUIRED

@@ -1,0 +1,4 @@
+unispace:
+  database:
+    port: ${DB_PORT:3308}
+    ssl-mode: ${DB_SSL_MODE:REQUIRED}

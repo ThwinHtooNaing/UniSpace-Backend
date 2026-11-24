@@ -1,0 +1,5 @@
+unispace:
+  database:
+    host: mysql
+    auto-create: false
+    ssl-mode: ${DB_SSL_MODE:REQUIRED}

@@ -1,0 +1,50 @@
+services:
+  app:
+    build: .
+    environment:
+      SPRING_PROFILES_ACTIVE: docker
+      DB_HOST: mysql
+      DB_PORT: "3306"
+      DB_NAME: "${DB_NAME:?Set DB_NAME in .env.docker}"
+      DB_AUTO_CREATE: "false"
+      DB_USERNAME: "${DB_USERNAME:?Set DB_USERNAME in .env.docker}"
+      DB_PASSWORD: "${DB_PASSWORD:?Set DB_PASSWORD in .env.docker}"
+      DB_SSL_MODE: "${DB_SSL_MODE:-REQUIRED}"
+      DB_MIGRATIONS_ENABLED: "${DB_MIGRATIONS_ENABLED:-false}"
+    depends_on:
+      mysql:
+        condition: service_healthy
+    ports:
+      - "127.0.0.1:8080:8080"
+    networks:
+      - frontend
+      - database
+
+  mysql:
+    image: mysql:8.4
+    environment:
+      MYSQL_DATABASE: "${DB_NAME:?Set DB_NAME in .env.docker}"
+      MYSQL_USER: "${DB_USERNAME:?Set DB_USERNAME in .env.docker}"
+      MYSQL_PASSWORD: "${DB_PASSWORD:?Set DB_PASSWORD in .env.docker}"
+      MYSQL_ROOT_PASSWORD: "${MYSQL_ROOT_PASSWORD:?Set MYSQL_ROOT_PASSWORD in .env.docker}"
+      MYSQL_ROOT_HOST: localhost
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - 'MYSQL_PWD="$${MYSQL_PASSWORD}" mysql --protocol=TCP -h 127.0.0.1 -u "$${MYSQL_USER}" --database="$${MYSQL_DATABASE}" --execute="SELECT 1"'
+      interval: 5s
+      timeout: 5s
+      start_period: 30s
+      retries: 20
+    volumes:
+      - mysql-data:/var/lib/mysql
+    networks:
+      - database
+
+networks:
+  frontend:
+  database:
+    internal: true
+
+volumes:
+  mysql-data:

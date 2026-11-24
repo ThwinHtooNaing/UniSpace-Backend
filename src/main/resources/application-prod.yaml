@@ -1,0 +1,15 @@
+spring:
+  devtools:
+    restart:
+      enabled: false
+    livereload:
+      enabled: false
+  flyway:
+    enabled: ${DB_PROD_MIGRATIONS_ENABLED:false}
+
+unispace:
+  database:
+    host: ${DB_HOST}
+    name: ${DB_NAME}
+    auto-create: false
+    ssl-mode: VERIFY_IDENTITY
