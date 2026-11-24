@@ -1,5 +1,6 @@
 package com.unispace.infrastructure.security;
 
+import com.unispace.identity.application.RestrictedFlowTokens;
 import com.nimbusds.jose.JOSEException;
 import com.nimbusds.jose.JOSEObjectType;
 import com.nimbusds.jose.JWSAlgorithm;
@@ -28,7 +29,7 @@ import tools.jackson.core.type.TypeReference;
 import tools.jackson.databind.DeserializationFeature;
 import tools.jackson.databind.json.JsonMapper;
 
-public final class UniSpaceJwtService {
+public final class UniSpaceJwtService implements RestrictedFlowTokens {
     enum Kind {
         ACCESS("access", "unispace-access+jwt", "urn:unispace:api", "sid", 1200),
         FLOW("auth_flow", "unispace-flow+jwt", "urn:unispace:auth-flow", "fid", 900);
@@ -88,6 +89,12 @@ public final class UniSpaceJwtService {
         return new FlowTokenId(newJti());
     }
 
+    @Override
+    public Pending prepareFlow() {
+        var tokenId = newFlowTokenId();
+        return new Pending(tokenId.digest(), (userId, flowId) -> issueFlow(userId, flowId, tokenId));
+    }
+
     public String issueFlow(BigInteger userId, BigInteger flowId, FlowTokenId tokenId) {
         return issue(Kind.FLOW, userId, flowId, tokenId.jti);
     }
@@ -125,14 +132,17 @@ public final class UniSpaceJwtService {
 
     Verified verify(String compact) {
         try {
-            var token = JWSObject.parse(compact);
-            var header = JSON.readValue(token.getParsedParts()[0].decode(), OBJECT);
+            var parts = compact.split("\\.", 4);
+            require(parts.length == 3);
+            var header = JSON.readValue(decodeCompactPart(parts[0]), OBJECT);
             require(header.keySet().equals(Set.of("alg", "kid", "typ")) && "RS256".equals(header.get("alg")));
             var key = verificationKeys.get(header.get("kid"));
-            require(key != null && token.verify(new RSASSAVerifier(key)));
+            require(key != null && decodeCompactPart(parts[2]).length == 3072 / Byte.SIZE);
+            var token = JWSObject.parse(compact);
+            require(token.verify(new RSASSAVerifier(key)));
             Kind kind = Kind.ACCESS.type.equals(header.get("typ")) ? Kind.ACCESS : Kind.FLOW;
             require(kind.type.equals(header.get("typ")));
-            var claims = JSON.readValue(token.getPayload().toBytes(), OBJECT);
+            var claims = JSON.readValue(decodeCompactPart(parts[1]), OBJECT);
             require(issuer.equals(claims.get("iss")) && kind.purpose.equals(claims.get("purpose")));
             Object audience = claims.get("aud");
             require(kind.audience.equals(audience) || List.of(kind.audience).equals(audience));
@@ -146,6 +156,12 @@ public final class UniSpaceJwtService {
         } catch (ParseException | JOSEException | RuntimeException e) {
             throw new InvalidBearerTokenException("Invalid bearer token");
         }
+    }
+
+    private static byte[] decodeCompactPart(String part) {
+        byte[] bytes = Base64.getUrlDecoder().decode(part);
+        require(bytes.length > 0 && URL.encodeToString(bytes).equals(part));
+        return bytes;
     }
 
     private void checkTimes(Kind kind, Map<String, Object> claims) {

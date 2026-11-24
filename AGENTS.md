@@ -4,7 +4,7 @@ UniSpace is a university mobile application with a Java 21, Spring Boot 4.2, fea
 
 The current implementation provides Maven, Spring Data JPA, Flyway, MySQL 8.4, Docker Compose, and JUnit/Testcontainers infrastructure.
 
-Spring Security and JWT are the planned B3-I04 foundation. Implementation requires explicit approval of the implementation plan. Authentication business services, private R2 storage, and other backend modules are not yet implemented.
+Spring Security, JWT, and the Google sign-in challenge and provider exchange are implemented. Live Google integration still requires client configuration and verification. Later authentication workflows, private R2 storage, and other backend modules remain pending.
 
 ## 1. Requirements and Architecture
 
@@ -31,6 +31,8 @@ Verified checkpoint: November 24, 2026.
 - B3-I03B — Database test isolation: Passed.
 - B3-I04A — Security implementation inspection and planning: Completed, read-only.
 - B3-I04 — Spring Security and JWT foundation: Implemented and verified on November 24, 2026. Deployment key provisioning and Compose key mounts remain pending separate approval.
+- B3-I04B/C — Security audit and corrections completed November 24, 2026. Verification now checks compact JWT encoding, device key usage, email verification time, and the time of provider challenge consumption.
+- B3-I05 — Google challenge issuance and provider exchange implemented and verified with controlled fixtures on November 24, 2026. Live Google Cloud and mobile client integration remain pending.
 
 Latest database regression results:
 
@@ -39,6 +41,10 @@ Latest database regression results:
 - Database regression subtotal: 24 passed, 0 failed, 0 errors, 0 skipped.
 
 The same B3-I04 Maven run passed 20 JWT tests, 3 signing-key tests, and 8 HTTP and authoritative-state integration tests. Combined result: 55 executed, 55 passed, 0 failed, 0 errors, 0 skipped.
+
+The subsequent B3-I04B/C run retained all 55 tests and added four security regressions. The opt-in Maven run on disposable MySQL 8.4.11 passed all 59 tests (19 V1, 5 V2, 21 JWT, 3 signing-key, 11 HTTP and authoritative-state). Failures, errors, and skips were all zero.
+
+The B3-I05 opt-in Maven run passed all 59 existing tests plus 15 Google token-verifier tests and 9 Google HTTP and transaction tests. Combined result is 83 executed, 83 passed, 0 failed, 0 errors, and 0 skipped.
 
 Do not claim tests have been rerun unless they were actually executed.
 
@@ -171,22 +177,13 @@ Do not commit or push without explicit authorization.
 
 ## 7. Next Implementation Boundary
 
-Next phase: **B3-I04 — Spring Security and JWT Foundation**.
+**B3-I06 requires separate implementation approval.**
 
-Authorized scope after implementation-plan approval:
-
-- Spring Security infrastructure.
-- RS256 JWT signing and validation.
-- Restricted-flow credential separation.
-- Server-side authorization integration boundaries.
-- RFC 9457 security error handling.
-- Security unit and integration tests.
-
-Do not implement Google/Apple login, OTP delivery, trusted-device enrollment workflows, or refresh-token business services in this phase.
+Google sign-in issues only a restricted authentication-flow JWT. Apple sign-in, provider linking, university OTP, trusted-device enrollment, refresh-token rotation, and sign-out require their approved implementation phases.
 
 Do not modify protected environment configuration without separate approval.
 
-Stop after B3-I04 and report implementation results.
+Stop after the authorized phase and report implementation results.
 
 ---
 

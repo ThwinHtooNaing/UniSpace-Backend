@@ -66,6 +66,10 @@ class UniSpaceJwtServiceTests {
         assertThatThrownBy(() -> at(NOW.plusSeconds(1230)).verify(token)).isInstanceOf(InvalidBearerTokenException.class);
     }
 
+    @Test void requiresUnpaddedCompactSerialization() {
+        assertThatThrownBy(() -> service.verify(token + "=")).isInstanceOf(InvalidBearerTokenException.class);
+    }
+
     @ParameterizedTest
     @ValueSource(strings = {"issuer","audience","mixedAudience","purpose","type","signature","kid","algorithm",
             "mixedBinding","missingBinding","subject","bindingType","jti","iat","nbf","lifetime","missingExp","jku"})

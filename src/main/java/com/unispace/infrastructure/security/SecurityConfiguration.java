@@ -1,6 +1,7 @@
 package com.unispace.infrastructure.security;
 
 import com.unispace.identity.application.AuthenticationStateService;
+import com.unispace.identity.application.GoogleIdentityVerifier;
 import java.math.BigInteger;
 import java.security.Principal;
 import java.time.Clock;
@@ -12,6 +13,7 @@ import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.dao.DataAccessException;
 import org.springframework.http.HttpHeaders;
+import org.springframework.http.HttpMethod;
 import org.springframework.security.authentication.AuthenticationManager;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
 import org.springframework.security.config.annotation.web.builders.HttpSecurity;
@@ -66,8 +68,10 @@ public class SecurityConfiguration {
             } catch (DataAccessException unavailable) {
                 throw new OAuth2AuthenticationException(new OAuth2Error(SecurityProblemHandler.STATE_UNAVAILABLE));
             }
-            return UsernamePasswordAuthenticationToken.authenticated(
-                    new CurrentIdentity(verified.kind(), verified.userId(), verified.bindingId()), null, authorities);
+            Principal principal = verified.kind() == UniSpaceJwtService.Kind.ACCESS
+                    ? new AuthenticationStateService.AccessSession(verified.userId(), verified.bindingId())
+                    : new CurrentIdentity(verified.kind(), verified.userId(), verified.bindingId());
+            return UsernamePasswordAuthenticationToken.authenticated(principal, null, authorities);
         };
     }
 
@@ -77,7 +81,8 @@ public class SecurityConfiguration {
 
     @Bean
     SecurityFilterChain securityFilterChain(HttpSecurity http, AuthenticationManager manager, ObjectMapper mapper,
-                                            ObjectProvider<OperationRules> operations) throws Exception {
+                                            ObjectProvider<OperationRules> operations,
+                                            ObjectProvider<GoogleIdentityVerifier> google) throws Exception {
         var problems = new SecurityProblemHandler(mapper);
         var bearer = new BearerTokenAuthenticationConverter();
         http.sessionManagement(s -> s.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
@@ -99,6 +104,10 @@ public class SecurityConfiguration {
                 .exceptionHandling(errors -> errors.authenticationEntryPoint(problems).accessDeniedHandler(problems))
                 .authorizeHttpRequests(rules -> {
                     rules.requestMatchers("/actuator", "/actuator/**").denyAll();
+                    if (google.getIfAvailable() != null) {
+                        rules.requestMatchers(HttpMethod.POST, "/api/v1/auth/challenges",
+                                "/api/v1/auth/provider-exchange").permitAll();
+                    }
                     operations.orderedStream().forEach(operation -> operation.configure(rules));
                     rules.anyRequest().denyAll();
                 });

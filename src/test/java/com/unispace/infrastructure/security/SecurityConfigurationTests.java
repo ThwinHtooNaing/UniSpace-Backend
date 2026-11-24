@@ -31,6 +31,8 @@ import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 import org.testcontainers.mysql.MySQLContainer;
 
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.junit.jupiter.api.Assertions.assertAll;
 import static org.mockito.Mockito.doThrow;
 import static org.springframework.security.test.web.servlet.setup.SecurityMockMvcConfigurers.springSecurity;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
@@ -243,5 +245,47 @@ class SecurityConfigurationTests {
                 .andExpect(jsonPath("$.status").value(503)).andExpect(jsonPath("$.code").value("AUTH_STATE_UNAVAILABLE"))
                 .andExpect(jsonPath("$.traceId").isNotEmpty())
                 .andExpect(content().string(org.hamcrest.Matchers.not(org.hamcrest.Matchers.containsString("sensitive"))));
+    }
+
+    @Test void futureEmailVerificationIsNotCurrentForEitherCredential() throws Exception {
+        access();
+        flow();
+        db.update("UPDATE users SET email_verified_at=UTC_TIMESTAMP(6)+INTERVAL 1 DAY WHERE id=?", id);
+        assertAll(
+                () -> assertThat(state.accessRole(user, user)).isEmpty(),
+                () -> assertThat(state.flowStep(user, user, tokenId.digest())).isEmpty());
+    }
+
+    @Test void trustedDeviceRequiresASignatureVerificationKey() throws Exception {
+        access();
+        db.update("""
+                UPDATE trusted_devices SET public_key_jwk=JSON_SET(public_key_jwk, '$.use', 'sig',
+                    '$.key_ops', JSON_ARRAY('verify'), '$.alg', 'ES256') WHERE id=?
+                """, id);
+        assertThat(state.accessRole(user, user)).contains(AuthenticationStateService.Role.STUDENT);
+        db.update("UPDATE trusted_devices SET public_key_jwk=JSON_SET(public_key_jwk, '$.alg', 'ES384') WHERE id=?", id);
+        assertThat(state.accessRole(user, user)).isEmpty();
+        db.update("UPDATE trusted_devices SET public_key_jwk=JSON_SET(public_key_jwk, '$.key_ops', JSON_ARRAY('sign'), '$.alg', 'ES256') WHERE id=?", id);
+        assertThat(state.accessRole(user, user)).isEmpty();
+        db.update("UPDATE trusted_devices SET public_key_jwk=? WHERE id=?", deviceKey.toJSONString(), id);
+        db.update("UPDATE trusted_devices SET public_key_jwk=JSON_SET(public_key_jwk, '$.use', 'enc') WHERE id=?", id);
+        assertThat(state.accessRole(user, user)).isEmpty();
+    }
+
+    @Test void sourceChallengeMustHaveBeenConsumedDuringItsLifetime() {
+        flow();
+        db.update("""
+                UPDATE provider_auth_challenges SET created_at=UTC_TIMESTAMP(6)-INTERVAL 8 MINUTE,
+                    expires_at=UTC_TIMESTAMP(6)-INTERVAL 3 MINUTE, consumed_at=UTC_TIMESTAMP(6)-INTERVAL 4 MINUTE
+                WHERE id=?
+                """, id);
+        // A valid exchange remains usable after its provider challenge has expired.
+        assertThat(state.flowStep(user, user, tokenId.digest())).isPresent();
+        db.update("UPDATE provider_auth_challenges SET consumed_at=expires_at WHERE id=?", id);
+        assertThat(state.flowStep(user, user, tokenId.digest())).isEmpty();
+        db.update("UPDATE provider_auth_challenges SET expires_at=UTC_TIMESTAMP(6), consumed_at=created_at+INTERVAL 5 MINUTE WHERE id=?", id);
+        assertThat(state.flowStep(user, user, tokenId.digest())).isEmpty();
+        db.update("UPDATE provider_auth_challenges SET consumed_at=created_at-INTERVAL 1 SECOND WHERE id=?", id);
+        assertThat(state.flowStep(user, user, tokenId.digest())).isEmpty();
     }
 }
