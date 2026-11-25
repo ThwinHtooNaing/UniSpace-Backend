@@ -12,6 +12,12 @@ public interface AuthenticationStateService {
             return userId.toString();
         }
     }
+    record RegistrationFlow(BigInteger userId, BigInteger flowId, byte[] jtiDigest) implements Principal {
+        @Override
+        public String getName() {
+            return userId.toString();
+        }
+    }
     enum Role { STUDENT, SUB_MANAGEMENT, MANAGEMENT, ADMIN }
 
     // An ACTIVE account can begin device verification; individual proof operations need a bound challenge.

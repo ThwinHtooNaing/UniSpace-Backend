@@ -6,6 +6,8 @@ import java.time.Duration;
 import java.time.Instant;
 import java.util.Arrays;
 import java.util.List;
+import java.text.ParseException;
+import com.nimbusds.jose.JWSObject;
 import java.util.Set;
 import java.util.stream.Collectors;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
@@ -47,6 +49,9 @@ final class GoogleIdTokenVerifier implements GoogleIdentityVerifier {
     public Proof verify(String idToken) {
         try {
             var jwt = decoder.decode(idToken);
+            // The decoder normalizes registered claims. Check the subject's original JSON type
+            // on the exact payload whose signature it just authenticated.
+            var signedClaims = JWSObject.parse(jwt.getTokenValue()).getPayload().toJSONObject();
             var claims = jwt.getClaims();
             var headers = jwt.getHeaders();
             var now = clock.instant();
@@ -55,7 +60,6 @@ final class GoogleIdTokenVerifier implements GoogleIdentityVerifier {
             Instant notBefore = jwt.getNotBefore();
             Object presenter = claims.get("azp");
             Object nonce = claims.get("nonce");
-            String subject = jwt.getSubject();
             if (!"RS256".equals(headers.get("alg")) || !(headers.get("kid") instanceof String kid) || kid.isBlank()
                     || !ISSUERS.contains(String.valueOf(claims.get("iss")))
                     || !List.of(audience).equals(jwt.getAudience())
@@ -64,12 +68,13 @@ final class GoogleIdTokenVerifier implements GoogleIdentityVerifier {
                     || issued == null || expires == null || !expires.isAfter(now) || !expires.isAfter(issued)
                     || issued.isAfter(now.plusSeconds(30))
                     || (notBefore != null && (notBefore.isAfter(now.plusSeconds(30)) || !notBefore.isBefore(expires)))
-                    || subject == null || !subject.matches("[\\x21-\\x7e]{1,255}")
+                    || signedClaims == null || !(signedClaims.get("sub") instanceof String subject)
+                    || !subject.matches("[\\x21-\\x7e]{1,255}") || !subject.equals(jwt.getSubject())
                     || !(nonce instanceof String value) || value.isBlank() || value.length() > 128) {
                 throw new InvalidProof();
             }
             return new Proof(subject, value, issued, expires, name(claims.get("given_name")), name(claims.get("family_name")));
-        } catch (BadJwtException | IllegalArgumentException e) {
+        } catch (BadJwtException | IllegalArgumentException | ParseException e) {
             throw new InvalidProof();
         } catch (JwtException e) {
             throw new VerificationUnavailable();

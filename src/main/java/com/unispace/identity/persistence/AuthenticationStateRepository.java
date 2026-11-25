@@ -84,7 +84,8 @@ public class AuthenticationStateRepository implements AuthenticationStateService
                 SELECT u.status, u.email_verified_at <= UTC_TIMESTAMP(6) AS email_verified,
                        EXISTS (SELECT 1 FROM email_challenges e WHERE e.user_id = f.user_id AND e.auth_flow_id = f.id
                                AND e.purpose = 'REGISTRATION' AND e.invalidated_at IS NULL AND e.consumed_at IS NULL
-                               AND e.attempt_count < 5 AND e.created_at <= UTC_TIMESTAMP(6)
+                               AND e.attempt_count < 5 AND OCTET_LENGTH(e.code_digest) = 32
+                               AND e.created_at <= UTC_TIMESTAMP(6)
                                AND e.expires_at > UTC_TIMESTAMP(6)) AS has_registration_code
                 FROM auth_flows f
                 JOIN users u ON u.id = f.user_id

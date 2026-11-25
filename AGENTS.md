@@ -4,7 +4,7 @@ UniSpace is a university mobile application with a Java 21, Spring Boot 4.2, fea
 
 The current implementation provides Maven, Spring Data JPA, Flyway, MySQL 8.4, Docker Compose, and JUnit/Testcontainers infrastructure.
 
-Spring Security, JWT, and the Google sign-in challenge and provider exchange are implemented. Live Google integration still requires client configuration and verification. Later authentication workflows, private R2 storage, and other backend modules remain pending.
+The Google-first backend supports sign-in, student onboarding, university-email verification, trusted-device enrollment and proof, session refresh, and current-device sign-out. B3-I09 verified all 12 backend journeys with controlled fixtures. Full MVP authentication and production acceptance remain open. Private R2 storage and other backend modules remain pending.
 
 ## 1. Requirements and Architecture
 
@@ -22,7 +22,7 @@ Spring Security, JWT, and the Google sign-in challenge and provider exchange are
 
 ## 2. Current Development Status
 
-Verified checkpoint: November 24, 2026.
+Verified checkpoint: November 25, 2026.
 
 - B3-I01 — Repository audit: Completed.
 - B3-I02 — Authentication contract synchronization: Completed.
@@ -33,6 +33,10 @@ Verified checkpoint: November 24, 2026.
 - B3-I04 — Spring Security and JWT foundation: Implemented and verified on November 24, 2026. Deployment key provisioning and Compose key mounts remain pending separate approval.
 - B3-I04B/C — Security audit and corrections completed November 24, 2026. Verification now checks compact JWT encoding, device key usage, email verification time, and the time of provider challenge consumption.
 - B3-I05 — Google challenge issuance and provider exchange implemented and verified with controlled fixtures on November 24, 2026. Live Google Cloud and mobile client integration remain pending.
+- B3-I06 — Onboarding and university-email OTP implemented and verified with a controlled sender on November 24, 2026. Successful registration verification creates eligibility for initial device enrollment. Live mail delivery requires configuration and verification.
+- B3-I07 — Trusted-device enrollment, new-device OTP, P-256 possession proof, and initial session issuance implemented and verified on November 25, 2026. See the [device possession protocol](docs/architecture/B3/Device_Possession_Protocol_v1.md) for the byte format and test vector.
+- B3-I08 — Session refresh rotation, strict consumed-token replay revocation, and current-device sign-out implemented and verified on November 25, 2026. Clients use either the bearer or refresh-body sign-out form. Mixed-credential precedence remains open.
+- B3-I09 — Authentication integration and security verification completed November 25, 2026. The Google-first implementation is ready for downstream backend development. Replaying the oldest refresh credential after two or six rotations revokes only its family, including under a competing rotation. The signed Google subject must be a string. [Journey evidence, security audit and release requirements](docs/architecture/B3/B3-I09_Authentication_Verification.md)
 
 Latest database regression results:
 
@@ -45,6 +49,14 @@ The same B3-I04 Maven run passed 20 JWT tests, 3 signing-key tests, and 8 HTTP a
 The subsequent B3-I04B/C run retained all 55 tests and added four security regressions. The opt-in Maven run on disposable MySQL 8.4.11 passed all 59 tests (19 V1, 5 V2, 21 JWT, 3 signing-key, 11 HTTP and authoritative-state). Failures, errors, and skips were all zero.
 
 The B3-I05 opt-in Maven run passed all 59 existing tests plus 15 Google token-verifier tests and 9 Google HTTP and transaction tests. Combined result is 83 executed, 83 passed, 0 failed, 0 errors, and 0 skipped.
+
+The B3-I06 opt-in Maven run passed all 83 existing tests and 9 new onboarding tests. Combined result is 92 executed, 92 passed, 0 failed, 0 errors, and 0 skipped.
+
+The B3-I07 opt-in Maven run passed all 92 existing tests, 2 cryptographic tests, and 8 device integration tests. Combined result is 102 executed, 102 passed, 0 failed, 0 errors, and 0 skipped.
+
+The B3-I08 opt-in Maven run passed the 102 existing tests and 11 session lifecycle integration tests. Combined result is 113 executed, 113 passed, 0 failed, 0 errors, and 0 skipped.
+
+The B3-I09 run on disposable MySQL 8.4 retained those 113 tests and added four HTTP journey cases and one Google verifier regression. Maven executed 118 tests. All 118 passed, with 0 failures, 0 errors and 0 skipped.
 
 Do not claim tests have been rerun unless they were actually executed.
 
@@ -177,9 +189,11 @@ Do not commit or push without explicit authorization.
 
 ## 7. Next Implementation Boundary
 
-**B3-I06 requires separate implementation approval.**
+**B3-I09 verification is complete. B4 Administration is ready to begin upon separate authorization.**
 
-Google sign-in issues only a restricted authentication-flow JWT. Apple sign-in, provider linking, university OTP, trusted-device enrollment, refresh-token rotation, and sign-out require their approved implementation phases.
+Full MVP authentication still requires Apple sign-in and both `GET` and `POST /api/v1/me/linked-providers` for FR-167. Open security work includes public challenge rate limiting, authentication audit-event capture and retention evidence, and refresh HMAC key rotation that preserves replay detection.
+
+Production acceptance requires final API contract approval, deployment keys and configuration, live Google and SMTP checks, and Android/iOS verification of device signing, secure storage and Flutter session handling. See the [B3-I09 release checklist](docs/architecture/B3/B3-I09_Authentication_Verification.md).
 
 Do not modify protected environment configuration without separate approval.
 

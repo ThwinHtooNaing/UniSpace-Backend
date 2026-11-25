@@ -1,6 +1,7 @@
 package com.unispace.infrastructure.security;
 
 import com.unispace.identity.application.RestrictedFlowTokens;
+import com.unispace.identity.application.AccessTokenIssuer;
 import com.nimbusds.jose.JOSEException;
 import com.nimbusds.jose.JOSEObjectType;
 import com.nimbusds.jose.JWSAlgorithm;
@@ -29,7 +30,7 @@ import tools.jackson.core.type.TypeReference;
 import tools.jackson.databind.DeserializationFeature;
 import tools.jackson.databind.json.JsonMapper;
 
-public final class UniSpaceJwtService implements RestrictedFlowTokens {
+public final class UniSpaceJwtService implements RestrictedFlowTokens, AccessTokenIssuer {
     enum Kind {
         ACCESS("access", "unispace-access+jwt", "urn:unispace:api", "sid", 1200),
         FLOW("auth_flow", "unispace-flow+jwt", "urn:unispace:auth-flow", "fid", 900);
@@ -81,6 +82,7 @@ public final class UniSpaceJwtService implements RestrictedFlowTokens {
         this.clock = clock;
     }
 
+    @Override
     public String issueAccess(BigInteger userId, BigInteger sessionId) {
         return issue(Kind.ACCESS, userId, sessionId, newJti());
     }

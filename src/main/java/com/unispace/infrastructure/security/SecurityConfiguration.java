@@ -2,7 +2,6 @@ package com.unispace.infrastructure.security;
 
 import com.unispace.identity.application.AuthenticationStateService;
 import com.unispace.identity.application.GoogleIdentityVerifier;
-import java.math.BigInteger;
 import java.security.Principal;
 import java.time.Clock;
 import java.util.List;
@@ -38,10 +37,6 @@ public class SecurityConfiguration {
         void configure(AuthorizeHttpRequestsConfigurer<HttpSecurity>.AuthorizationManagerRequestMatcherRegistry rules);
     }
 
-    record CurrentIdentity(UniSpaceJwtService.Kind kind, BigInteger userId, BigInteger bindingId) implements Principal {
-        @Override public String getName() { return userId.toString(); }
-    }
-
     @Bean
     UniSpaceJwtService jwtService(JwtProperties properties) {
         return JwtKeyConfiguration.load(properties, Clock.systemUTC());
@@ -53,24 +48,25 @@ public class SecurityConfiguration {
             if (!(authentication instanceof BearerTokenAuthenticationToken bearer)) throw invalidBinding();
             var verified = tokens.verify(bearer.getToken());
             List<SimpleGrantedAuthority> authorities;
+            Principal principal;
             try {
                 if (verified.kind() == UniSpaceJwtService.Kind.ACCESS) {
                     var role = state.accessRole(verified.userId(), verified.bindingId())
                             .orElseThrow(SecurityConfiguration::invalidBinding);
                     authorities = List.of(new SimpleGrantedAuthority("ACCESS"), new SimpleGrantedAuthority("ROLE_" + role));
+                    principal = new AuthenticationStateService.AccessSession(verified.userId(), verified.bindingId());
                 } else {
-                    var step = state.flowStep(verified.userId(), verified.bindingId(), UniSpaceJwtService.digest(verified.jti()))
+                    byte[] digest = UniSpaceJwtService.digest(verified.jti());
+                    var step = state.flowStep(verified.userId(), verified.bindingId(), digest)
                             .orElseThrow(SecurityConfiguration::invalidBinding);
                     authorities = List.of(new SimpleGrantedAuthority("FLOW_" + step));
+                    principal = new AuthenticationStateService.RegistrationFlow(verified.userId(), verified.bindingId(), digest);
                 }
             } catch (AuthenticationStateService.DisabledAccountException disabled) {
                 throw new OAuth2AuthenticationException(new OAuth2Error(SecurityProblemHandler.ACCOUNT_DISABLED));
             } catch (DataAccessException unavailable) {
                 throw new OAuth2AuthenticationException(new OAuth2Error(SecurityProblemHandler.STATE_UNAVAILABLE));
             }
-            Principal principal = verified.kind() == UniSpaceJwtService.Kind.ACCESS
-                    ? new AuthenticationStateService.AccessSession(verified.userId(), verified.bindingId())
-                    : new CurrentIdentity(verified.kind(), verified.userId(), verified.bindingId());
             return UsernamePasswordAuthenticationToken.authenticated(principal, null, authorities);
         };
     }
@@ -104,6 +100,20 @@ public class SecurityConfiguration {
                 .exceptionHandling(errors -> errors.authenticationEntryPoint(problems).accessDeniedHandler(problems))
                 .authorizeHttpRequests(rules -> {
                     rules.requestMatchers("/actuator", "/actuator/**").denyAll();
+                    // The controller validates the body credential when bearer authorization is absent.
+                    rules.requestMatchers(HttpMethod.POST, "/api/v1/auth/refresh", "/api/v1/auth/sign-out").permitAll();
+                    rules.requestMatchers(HttpMethod.GET, "/api/v1/me/onboarding")
+                            .hasAnyAuthority("FLOW_PROFILE_REQUIRED", "FLOW_EMAIL_REQUIRED", "FLOW_EMAIL_VERIFICATION_REQUIRED");
+                    rules.requestMatchers(HttpMethod.PUT, "/api/v1/me/onboarding/profile")
+                            .hasAnyAuthority("FLOW_PROFILE_REQUIRED", "FLOW_EMAIL_REQUIRED", "FLOW_EMAIL_VERIFICATION_REQUIRED");
+                    rules.requestMatchers(HttpMethod.POST, "/api/v1/me/university-email/challenges",
+                            "/api/v1/me/university-email/verify")
+                            .hasAnyAuthority("FLOW_EMAIL_REQUIRED", "FLOW_EMAIL_VERIFICATION_REQUIRED");
+                    rules.requestMatchers(HttpMethod.POST, "/api/v1/auth/device-challenges",
+                            "/api/v1/auth/device-challenges/{id}/verify-otp",
+                            "/api/v1/auth/device-challenges/{id}/register-key",
+                            "/api/v1/auth/device-challenges/{id}/verify-proof")
+                            .hasAuthority("FLOW_BEGIN_DEVICE_VERIFICATION");
                     if (google.getIfAvailable() != null) {
                         rules.requestMatchers(HttpMethod.POST, "/api/v1/auth/challenges",
                                 "/api/v1/auth/provider-exchange").permitAll();

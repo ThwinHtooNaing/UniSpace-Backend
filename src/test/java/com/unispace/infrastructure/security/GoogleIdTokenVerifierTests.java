@@ -98,4 +98,9 @@ class GoogleIdTokenVerifierTests {
     private static void assertInvalid(String token) {
         assertThatThrownBy(() -> verifier.verify(token)).isInstanceOf(GoogleIdentityVerifier.InvalidProof.class);
     }
+
+    @Test
+    void requiresStringSubjectInTheSignedGoogleClaims() throws Exception {
+        assertInvalid(token(claims -> claims.claim("sub", 12345), key, JWSAlgorithm.RS256));
+    }
 }
