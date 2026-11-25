@@ -102,6 +102,9 @@ public class SecurityConfiguration {
                     rules.requestMatchers("/actuator", "/actuator/**").denyAll();
                     // The controller validates the body credential when bearer authorization is absent.
                     rules.requestMatchers(HttpMethod.POST, "/api/v1/auth/refresh", "/api/v1/auth/sign-out").permitAll();
+                    rules.requestMatchers(HttpMethod.GET, "/api/v1/me/authorization").hasAuthority("ACCESS");
+                    rules.requestMatchers(HttpMethod.GET, "/api/v1/admin/users", "/api/v1/admin/users/{userId}")
+                            .access(AdminAuthorization.httpAccess());
                     rules.requestMatchers(HttpMethod.GET, "/api/v1/me/onboarding")
                             .hasAnyAuthority("FLOW_PROFILE_REQUIRED", "FLOW_EMAIL_REQUIRED", "FLOW_EMAIL_VERIFICATION_REQUIRED");
                     rules.requestMatchers(HttpMethod.PUT, "/api/v1/me/onboarding/profile")

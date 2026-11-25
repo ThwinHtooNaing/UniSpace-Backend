@@ -3,10 +3,16 @@ package com.unispace.infrastructure.security;
 import com.nimbusds.jose.jwk.Curve;
 import com.nimbusds.jose.jwk.ECKey;
 import com.nimbusds.jose.jwk.gen.ECKeyGenerator;
+import com.unispace.administration.application.UserDirectory;
 import com.unispace.identity.application.AuthenticationStateService;
+import com.unispace.identity.application.AuthenticationStateService.AccessSession;
 import java.math.BigInteger;
 import java.nio.file.Path;
 import java.util.HexFormat;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicLong;
 import org.junit.jupiter.api.*;
 import org.junit.jupiter.api.condition.EnabledIfSystemProperty;
@@ -19,12 +25,17 @@ import org.springframework.context.annotation.Import;
 import org.springframework.dao.DataAccessResourceFailureException;
 import org.springframework.http.HttpMethod;
 import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.security.access.AccessDeniedException;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
 import org.springframework.test.context.bean.override.mockito.MockitoSpyBean;
+import org.springframework.test.json.JsonCompareMode;
 import org.springframework.test.web.servlet.*;
 import org.springframework.test.web.servlet.setup.MockMvcBuilders;
+import org.springframework.transaction.IllegalTransactionStateException;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.support.TransactionTemplate;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.context.WebApplicationContext;
 import org.testcontainers.junit.jupiter.Container;
@@ -32,10 +43,12 @@ import org.testcontainers.junit.jupiter.Testcontainers;
 import org.testcontainers.mysql.MySQLContainer;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.junit.jupiter.api.Assertions.assertAll;
 import static org.mockito.Mockito.doThrow;
 import static org.springframework.security.test.web.servlet.setup.SecurityMockMvcConfigurers.springSecurity;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.*;
 
 @SpringBootTest
@@ -44,6 +57,8 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 @EnabledIfSystemProperty(named = "unispace.mysql.tests", matches = "true")
 @Import(SecurityConfigurationTests.Probes.class)
 class SecurityConfigurationTests {
+    private static final String AUTHORIZATION = "/api/v1/me/authorization";
+    private static final String ADMIN_USERS = "/api/v1/admin/users";
     @Container static final MySQLContainer MYSQL = new MySQLContainer("mysql:8.4");
     @TempDir static Path keyDir;
     static final AtomicLong IDS = new AtomicLong();
@@ -51,7 +66,10 @@ class SecurityConfigurationTests {
     @Autowired WebApplicationContext context;
     @Autowired UniSpaceJwtService tokens;
     @Autowired JdbcTemplate db;
+    @Autowired AdminAuthorization admins;
+    @Autowired PlatformTransactionManager transactions;
     @MockitoSpyBean AuthenticationStateService state;
+    @MockitoSpyBean UserDirectory directory;
     MockMvc http;
     long id;
     BigInteger user;
@@ -76,7 +94,7 @@ class SecurityConfigurationTests {
     static class Probes {
         @Bean SecurityConfiguration.OperationRules probeRules() {
             return rules -> rules.requestMatchers(HttpMethod.GET, "/probe/member").hasAuthority("ACCESS")
-                    .requestMatchers(HttpMethod.GET, "/probe/admin").hasRole("ADMIN")
+                    .requestMatchers(HttpMethod.GET, "/probe/admin").access(AdminAuthorization.httpAccess())
                     .requestMatchers(HttpMethod.GET, "/probe/profile").hasAuthority("FLOW_PROFILE_REQUIRED")
                     .requestMatchers(HttpMethod.GET, "/probe/email").hasAuthority("FLOW_EMAIL_REQUIRED")
                     .requestMatchers(HttpMethod.GET, "/probe/code").hasAuthority("FLOW_EMAIL_VERIFICATION_REQUIRED")
@@ -154,9 +172,12 @@ class SecurityConfigurationTests {
     @Test void rechecksCurrentRoleOwnershipAndSessionOnEveryRequest() throws Exception {
         String token = access();
         call("/probe/member", token).andExpect(status().isOk());
+        call("/probe/admin", token).andExpect(status().isForbidden());
         call("/probe/profile", token).andExpect(status().isForbidden());
         db.update("UPDATE users SET role='ADMIN' WHERE id=?", id);
         call("/probe/admin", token).andExpect(status().isOk());
+        call("/api/v1/admin/role-requests", token).andExpect(status().isForbidden());
+        call("/probe/admin", flow()).andExpect(status().isForbidden());
         db.update("UPDATE users SET role='STUDENT' WHERE id=?", id);
         call("/probe/admin", token).andExpect(status().isForbidden())
                 .andExpect(jsonPath("$.status").value(403)).andExpect(jsonPath("$.code").value("ACCESS_DENIED"))
@@ -166,6 +187,190 @@ class SecurityConfigurationTests {
         call("/probe/member", token).andExpect(status().isUnauthorized());
         db.update("UPDATE auth_sessions SET expires_at=UTC_TIMESTAMP(6)+INTERVAL 1 DAY, revoked_at=UTC_TIMESTAMP(6) WHERE id=?", id);
         call("/probe/member", token).andExpect(status().isUnauthorized());
+    }
+
+    @Test void currentAuthorizationReflectsDatabaseRoleOnTheSameAccessToken() throws Exception {
+        String token = access();
+        call(AUTHORIZATION, token).andExpect(status().isOk()).andExpect(header().string("Cache-Control", "no-store"))
+                .andExpect(content().json("""
+                        {"userId":"%s","role":"STUDENT"}
+                        """.formatted(user), JsonCompareMode.STRICT));
+        db.update("UPDATE users SET role='ADMIN' WHERE id=?", id);
+        call(AUTHORIZATION, token).andExpect(status().isOk()).andExpect(jsonPath("$.role").value("ADMIN"));
+        call(ADMIN_USERS, token).andExpect(status().isOk());
+        db.update("UPDATE users SET role='MANAGEMENT' WHERE id=?", id);
+        call(AUTHORIZATION, token).andExpect(status().isOk()).andExpect(jsonPath("$.role").value("MANAGEMENT"));
+        call(ADMIN_USERS, token).andExpect(status().isForbidden()).andExpect(jsonPath("$.code").value("ACCESS_DENIED"));
+    }
+
+    @Test void readOnlyRoutesRejectMissingInvalidAndUnusableAccessSessions() throws Exception {
+        String token = access();
+        db.update("UPDATE users SET role='ADMIN' WHERE id=?", id);
+        for (String path : new String[]{AUTHORIZATION, ADMIN_USERS, ADMIN_USERS + "/" + id}) {
+            http.perform(get(path)).andExpect(status().isUnauthorized())
+                    .andExpect(header().string("WWW-Authenticate", "Bearer"))
+                    .andExpect(jsonPath("$.code").value("AUTHENTICATION_REQUIRED"));
+            call(path, "invalid").andExpect(status().isUnauthorized());
+        }
+        db.update("UPDATE users SET status='DISABLED' WHERE id=?", id);
+        call(AUTHORIZATION, token).andExpect(status().isForbidden()).andExpect(jsonPath("$.code").value("ACCOUNT_DISABLED"));
+        call(ADMIN_USERS, token).andExpect(status().isForbidden()).andExpect(jsonPath("$.code").value("ACCOUNT_DISABLED"));
+        db.update("UPDATE users SET status='PENDING_EMAIL_VERIFICATION', email_verified_at=NULL WHERE id=?", id);
+        call(AUTHORIZATION, token).andExpect(status().isUnauthorized());
+        call(ADMIN_USERS, token).andExpect(status().isUnauthorized());
+        db.update("UPDATE users SET status='ACTIVE', email_verified_at=UTC_TIMESTAMP(6) WHERE id=?", id);
+        db.update("UPDATE auth_sessions SET revoked_at=UTC_TIMESTAMP(6) WHERE id=?", id);
+        call(AUTHORIZATION, token).andExpect(status().isUnauthorized());
+        call(ADMIN_USERS + "/" + id, token).andExpect(status().isUnauthorized());
+    }
+
+    @Test void onlyCurrentAdminsCanReadDirectoryAndOnlyAccessTokensCanUseEitherApi() throws Exception {
+        String token = access();
+        String target = ADMIN_USERS + "/99999";
+        for (String role : new String[]{"STUDENT", "SUB_MANAGEMENT", "MANAGEMENT"}) {
+            db.update("UPDATE users SET role=? WHERE id=?", role, id);
+            call(ADMIN_USERS + "?limit=0", token).andExpect(status().isForbidden());
+            call(target, token).andExpect(status().isForbidden()).andExpect(jsonPath("$.code").value("ACCESS_DENIED"));
+        }
+        db.update("UPDATE users SET role='ADMIN' WHERE id=?", id);
+        String restricted = flow();
+        for (String path : new String[]{AUTHORIZATION, ADMIN_USERS, target}) {
+            call(path, restricted).andExpect(status().isForbidden()).andExpect(jsonPath("$.code").value("ACCESS_DENIED"));
+        }
+        call(target, token).andExpect(status().isNotFound());
+        http.perform(put(ADMIN_USERS + "/" + id + "/role").header("Authorization", "Bearer " + token))
+                .andExpect(status().isForbidden());
+    }
+
+    @Test void directoryPagesByUnsignedIdAndSkipsProvisionalAccounts() throws Exception {
+        String admin = access();
+        db.update("UPDATE users SET role='ADMIN' WHERE id=?", id);
+        db.update("""
+                INSERT INTO users (id,first_name,last_name,role,status,email_verified_at,created_at,updated_at)
+                VALUES (9223372036854775808,'Same','Name','STUDENT','ACTIVE',UTC_TIMESTAMP(6),UTC_TIMESTAMP(6),UTC_TIMESTAMP(6)),
+                       (9223372036854775809,'Same','Name','STUDENT','PENDING_EMAIL_VERIFICATION',NULL,UTC_TIMESTAMP(6),UTC_TIMESTAMP(6)),
+                       (9223372036854775810,'Same','Name','MANAGEMENT','DISABLED',UTC_TIMESTAMP(6),UTC_TIMESTAMP(6),UTC_TIMESTAMP(6)),
+                       (9223372036854775811,'Same','Name','STUDENT','DISABLED',NULL,UTC_TIMESTAMP(6),UTC_TIMESTAMP(6)),
+                       (9223372036854775812,'Same','Name','STUDENT','ACTIVE',UTC_TIMESTAMP(6),UTC_TIMESTAMP(6),UTC_TIMESTAMP(6))
+                """);
+        call(ADMIN_USERS + "?limit=2&cursor=9223372036854775807", admin).andExpect(status().isOk())
+                .andExpect(header().string("Cache-Control", "no-store"))
+                .andExpect(content().json("""
+                        {"items":[
+                          {"userId":"9223372036854775808","firstName":"Same","lastName":"Name","role":"STUDENT","accountStatus":"ACTIVE"},
+                          {"userId":"9223372036854775810","firstName":"Same","lastName":"Name","role":"MANAGEMENT","accountStatus":"DISABLED"}
+                        ],"nextCursor":"9223372036854775810"}
+                        """, JsonCompareMode.STRICT));
+        call(ADMIN_USERS + "?limit=2&cursor=9223372036854775810", admin).andExpect(status().isOk())
+                .andExpect(content().json("""
+                        {"items":[{"userId":"9223372036854775812","firstName":"Same","lastName":"Name","role":"STUDENT","accountStatus":"ACTIVE"}],
+                         "nextCursor":null}
+                        """, JsonCompareMode.STRICT));
+        call(ADMIN_USERS + "/9223372036854775809", admin).andExpect(status().isNotFound());
+        call(ADMIN_USERS + "/9223372036854775811", admin).andExpect(status().isNotFound());
+        call(ADMIN_USERS + "/9223372036854775810", admin).andExpect(status().isOk())
+                .andExpect(jsonPath("$.accountStatus").value("DISABLED"))
+                .andExpect(jsonPath("$.channel").value(org.hamcrest.Matchers.nullValue()));
+    }
+
+    @Test void directoryDetailExposesOnlyApprovedFieldsAndCurrentMembership() throws Exception {
+        String admin = access();
+        db.update("""
+                UPDATE users SET role='ADMIN',first_name='Admin',last_name='Reader',student_id='Fixture-42',
+                                 university_email='fixture@example.edu'
+                WHERE id=?
+                """, id);
+        db.update("""
+                INSERT INTO provider_identities (user_id,provider,provider_subject,linked_at)
+                VALUES (?,'GOOGLE','private-fixture-subject',UTC_TIMESTAMP(6))
+                """, id);
+        db.update("""
+                INSERT INTO channels (id,name,name_normalized,creator_user_id,version,created_at,updated_at)
+                VALUES (500,'Fixture Channel','fixture channel',?,1,UTC_TIMESTAMP(6),UTC_TIMESTAMP(6))
+                """, id);
+        db.update("INSERT INTO channel_memberships (user_id,channel_id,joined_at) VALUES (?,500,UTC_TIMESTAMP(6))", id);
+        call(ADMIN_USERS + "/" + id, admin).andExpect(status().isOk())
+                .andExpect(header().string("Cache-Control", "no-store"))
+                .andExpect(content().json("""
+                        {"userId":"%s","firstName":"Admin","lastName":"Reader","role":"ADMIN","accountStatus":"ACTIVE",
+                         "studentId":"Fixture-42","universityEmail":"fixture@example.edu",
+                         "channel":{"channelId":"500","name":"Fixture Channel"}}
+                        """.formatted(id), JsonCompareMode.STRICT));
+    }
+
+    @Test void directoryReturnsBoundedValidationAndMissingResourceProblems() throws Exception {
+        String admin = access();
+        db.update("UPDATE users SET role='ADMIN' WHERE id=?", id);
+        for (String suffix : new String[]{"?limit=0", "?limit=101", "?limit=1&limit=2", "?cursor=18446744073709551616",
+                "?search=private", "?sort=firstName", "/01", "/18446744073709551616"}) {
+            call(ADMIN_USERS + suffix, admin).andExpect(status().isBadRequest())
+                    .andExpect(content().contentTypeCompatibleWith("application/problem+json"))
+                    .andExpect(jsonPath("$.code").value("VALIDATION_FAILED")).andExpect(jsonPath("$.traceId").isNotEmpty());
+        }
+        call(ADMIN_USERS + "/18446744073709551615", admin).andExpect(status().isNotFound())
+                .andExpect(header().string("Cache-Control", "no-store"))
+                .andExpect(jsonPath("$.code").value("USER_NOT_FOUND"));
+        call(ADMIN_USERS + "?cursor=18446744073709551615&limit=1", admin).andExpect(status().isOk())
+                .andExpect(content().json("{\"items\":[],\"nextCursor\":null}", JsonCompareMode.STRICT));
+    }
+
+    @Test void readOnlyRoutesReturnSanitizedProblemsWhenDatabaseStateIsUnavailable() throws Exception {
+        String admin = access();
+        db.update("UPDATE users SET role='ADMIN' WHERE id=?", id);
+        var failure = new DataAccessResourceFailureException("private database fixture");
+        doThrow(failure).when(directory).list(BigInteger.ZERO, 25);
+        call(ADMIN_USERS, admin).andExpect(status().isServiceUnavailable())
+                .andExpect(content().contentTypeCompatibleWith("application/problem+json"))
+                .andExpect(header().string("Cache-Control", "no-store"))
+                .andExpect(jsonPath("$.code").value("DIRECTORY_UNAVAILABLE"))
+                .andExpect(content().string(org.hamcrest.Matchers.not(org.hamcrest.Matchers.containsString("private"))));
+        doThrow(failure).when(state).accessRole(user, user);
+        call(AUTHORIZATION, admin).andExpect(status().isServiceUnavailable())
+                .andExpect(jsonPath("$.code").value("AUTH_STATE_UNAVAILABLE"))
+                .andExpect(content().string(org.hamcrest.Matchers.not(org.hamcrest.Matchers.containsString("private"))));
+    }
+
+    @Test void privilegedWriteRequiresATransactionAndRejectsARevokedSession() throws Exception {
+        access();
+        db.update("UPDATE users SET role='ADMIN' WHERE id=?", id);
+        var session = new AccessSession(user, user);
+        var transaction = new TransactionTemplate(transactions);
+        assertThatThrownBy(() -> admins.requireForMutation(session))
+                .isInstanceOf(IllegalTransactionStateException.class);
+        BigInteger actor = transaction.execute(status -> admins.requireForMutation(session));
+        assertThat(actor).isEqualTo(user);
+        db.update("UPDATE auth_sessions SET revoked_at=UTC_TIMESTAMP(6) WHERE id=?", id);
+        assertThatThrownBy(() -> transaction.execute(status -> admins.requireForMutation(session)))
+                .isInstanceOf(AccessDeniedException.class);
+    }
+
+    @Test void adminRoleIsLockedUntilThePrivilegedTransactionEnds() throws Exception {
+        access();
+        db.update("UPDATE users SET role='ADMIN' WHERE id=?", id);
+        var session = new AccessSession(user, user);
+        var transaction = new TransactionTemplate(transactions);
+        var updating = new CountDownLatch(1);
+        try (var executor = Executors.newSingleThreadExecutor()) {
+            var update = transaction.execute(status -> {
+                admins.requireForMutation(session);
+                var pending = executor.submit(() -> {
+                    updating.countDown();
+                    return db.update("UPDATE users SET role='STUDENT' WHERE id=?", id);
+                });
+                try {
+                    assertThat(updating.await(5, TimeUnit.SECONDS)).isTrue();
+                    assertThatThrownBy(() -> pending.get(200, TimeUnit.MILLISECONDS))
+                            .isInstanceOf(TimeoutException.class);
+                } catch (InterruptedException interrupted) {
+                    Thread.currentThread().interrupt();
+                    throw new AssertionError(interrupted);
+                }
+                return pending;
+            });
+            assertThat(update.get(5, TimeUnit.SECONDS)).isEqualTo(1);
+        }
+        assertThatThrownBy(() -> transaction.execute(status -> admins.requireForMutation(session)))
+                .isInstanceOf(AccessDeniedException.class);
     }
 
     @Test void acceptsOnlyAnExplicitSingleBearerAndCreatesNoSession() throws Exception {

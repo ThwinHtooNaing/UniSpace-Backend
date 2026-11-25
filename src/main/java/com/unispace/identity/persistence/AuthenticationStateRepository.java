@@ -35,6 +35,9 @@ public class AuthenticationStateRepository implements AuthenticationStateService
     @Override
     @Transactional(propagation = Propagation.MANDATORY)
     public Optional<Role> lockAccessRole(BigInteger userId, BigInteger sessionId) {
+        // Acquire the user first, as refresh, sign-out, and device flows do before locking child rows.
+        if (jdbc.queryForList("SELECT id FROM users WHERE id=? FOR SHARE", BigDecimal.class,
+                new BigDecimal(userId)).isEmpty()) return Optional.empty();
         return readAccessRole(userId, sessionId, " FOR SHARE");
     }
 

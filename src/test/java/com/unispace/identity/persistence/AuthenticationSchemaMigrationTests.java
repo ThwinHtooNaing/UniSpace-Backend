@@ -1,14 +1,10 @@
 package com.unispace.identity.persistence;
 
-import java.io.IOException;
-import java.nio.file.Files;
-import java.nio.file.Path;
 import java.sql.SQLException;
 import org.flywaydb.core.Flyway;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.condition.EnabledIfSystemProperty;
-import org.junit.jupiter.api.io.TempDir;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.datasource.DriverManagerDataSource;
 import org.testcontainers.junit.jupiter.Container;
@@ -25,19 +21,16 @@ class AuthenticationSchemaMigrationTests {
     @Container
     final MySQLContainer mysql = new MySQLContainer("mysql:8.4");
 
-    @TempDir
-    Path migrations;
     private Flyway flyway;
     private JdbcTemplate jdbc;
 
     @BeforeEach
-    void stageReviewCandidate() throws IOException {
-        Files.copy(Path.of("docs/drafts/B3/REVIEW_ONLY_V2__authentication_security.sql"),
-                migrations.resolve("V2__authentication_security.sql"));
+    void configureFlyway() {
         var database = new DriverManagerDataSource(mysql.getJdbcUrl(), mysql.getUsername(), mysql.getPassword());
         jdbc = new JdbcTemplate(database);
         flyway = Flyway.configure().dataSource(database)
-                .locations("classpath:db/migration", "filesystem:" + migrations.toAbsolutePath())
+                .locations("classpath:db/migration")
+                .target("2")
                 .cleanDisabled(true).load();
     }
 

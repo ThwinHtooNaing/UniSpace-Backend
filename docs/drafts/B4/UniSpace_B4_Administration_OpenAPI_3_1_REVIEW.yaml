@@ -1,0 +1,310 @@
+openapi: 3.1.0
+jsonSchemaDialect: https://json-schema.org/draft/2020-12/schema
+info:
+  title: UniSpace B4 Current Authorization and Admin Directory
+  version: 0.1.0-review
+  description: |
+    REVIEW ONLY. This candidate describes the implemented B4-I03A read operations.
+    The wire contract still requires approval before production client adoption.
+    Requirement trace is FR-009, FR-013, FR-104, FR-109 and UF-ADM-01/02.
+
+    Flutter loads current authorization after establishing an access session and
+    on app resume. It can use the returned role to show or hide Admin navigation.
+    API access remains subject to server checks on every request. On an Admin
+    403, refresh current authorization and leave the Admin view if access was
+    lost. On a 401, use the existing B3 session recovery flow.
+
+    Keep IDs and cursors as strings. Pass nextCursor unchanged on the next
+    request and stop when it is null. A cursor marks a position in current
+    results. An account that becomes eligible behind that position appears when
+    the client starts a new list. Keep directory responses and bearer credentials
+    out of persistent caches, logs and analytics.
+servers:
+  - url: /api/v1
+security:
+  - AccessBearer: []
+paths:
+  /me/authorization:
+    get:
+      operationId: getCurrentAuthorization
+      summary: Read the current user's authorization
+      description: |
+        Requires a valid access JWT bound to a current session and trusted
+        device for an active verified account. The role comes from the
+        authoritative account check for this request.
+      responses:
+        '200':
+          description: Current user ID and system role.
+          headers:
+            Cache-Control:
+              $ref: '#/components/headers/NoStore'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CurrentAuthorization'
+        '401':
+          $ref: '#/components/responses/AuthenticationRequired'
+        '403':
+          $ref: '#/components/responses/AccessDenied'
+        '503':
+          $ref: '#/components/responses/AuthUnavailable'
+  /admin/users:
+    get:
+      operationId: listAdminUsers
+      summary: List registered user accounts
+      description: |
+        Requires the current ADMIN role. Includes ACTIVE and DISABLED accounts
+        whose university email verification has completed. Provisional accounts
+        are outside the directory scope. Results are sorted by numeric user ID
+        ascending. The cursor is exclusive and may outlive the corresponding row.
+        Only limit and cursor are accepted. Search and alternate sorts are
+        pending approval. Unknown and repeated query parameters are rejected.
+      parameters:
+        - name: limit
+          in: query
+          description: Maximum entries to return, in decimal digits without leading zeros.
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 25
+        - name: cursor
+          in: query
+          description: Omit to start at the first entry. Use nextCursor to continue.
+          schema:
+            $ref: '#/components/schemas/UserId'
+      responses:
+        '200':
+          description: A page of directory summaries. An empty page is valid.
+          headers:
+            Cache-Control:
+              $ref: '#/components/headers/NoStore'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UserPage'
+        '400':
+          $ref: '#/components/responses/InvalidRequest'
+        '401':
+          $ref: '#/components/responses/AuthenticationRequired'
+        '403':
+          $ref: '#/components/responses/AccessDenied'
+        '503':
+          $ref: '#/components/responses/DirectoryUnavailable'
+  /admin/users/{userId}:
+    get:
+      operationId: getAdminUser
+      summary: Read registered user details
+      description: |
+        Requires the current ADMIN role. Detail adds the registered Student ID,
+        verified university email and current channel when present. The server
+        applies directory eligibility and checks access before returning details.
+      parameters:
+        - name: userId
+          in: path
+          required: true
+          schema:
+            $ref: '#/components/schemas/UserId'
+      responses:
+        '200':
+          description: Directory detail for a registered account.
+          headers:
+            Cache-Control:
+              $ref: '#/components/headers/NoStore'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UserDetail'
+        '400':
+          $ref: '#/components/responses/InvalidRequest'
+        '401':
+          $ref: '#/components/responses/AuthenticationRequired'
+        '403':
+          $ref: '#/components/responses/AccessDenied'
+        '404':
+          description: The user does not exist or is outside directory scope (USER_NOT_FOUND).
+          headers:
+            Cache-Control:
+              $ref: '#/components/headers/NoStore'
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '503':
+          $ref: '#/components/responses/DirectoryUnavailable'
+components:
+  securitySchemes:
+    AccessBearer:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: B3 access credential. Restricted onboarding credentials are forbidden.
+  headers:
+    NoStore:
+      schema:
+        type: string
+        const: no-store
+  responses:
+    InvalidRequest:
+      description: Invalid path ID or directory pagination parameters (VALIDATION_FAILED).
+      headers:
+        Cache-Control:
+          $ref: '#/components/headers/NoStore'
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+    AuthenticationRequired:
+      description: |
+        The credential is missing, invalid, expired, revoked or no longer bound
+        to an eligible access session (AUTHENTICATION_REQUIRED). This includes
+        an access credential for an account that is now provisional.
+      headers:
+        WWW-Authenticate:
+          schema:
+            type: string
+            const: Bearer
+        Cache-Control:
+          $ref: '#/components/headers/NoStore'
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+    AccessDenied:
+      description: |
+        The account is disabled (ACCOUNT_DISABLED), the credential is a valid
+        restricted onboarding credential, or the current role is insufficient
+        for the operation (ACCESS_DENIED).
+      headers:
+        Cache-Control:
+          $ref: '#/components/headers/NoStore'
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+    AuthUnavailable:
+      description: The current authorization state could not be verified (AUTH_STATE_UNAVAILABLE).
+      headers:
+        Cache-Control:
+          $ref: '#/components/headers/NoStore'
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+    DirectoryUnavailable:
+      description: Authorization or directory data is unavailable (AUTH_STATE_UNAVAILABLE or DIRECTORY_UNAVAILABLE).
+      headers:
+        Cache-Control:
+          $ref: '#/components/headers/NoStore'
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+  schemas:
+    UserId:
+      type: string
+      pattern: '^[1-9][0-9]{0,19}$'
+      description: Positive unsigned 64-bit decimal ID. Maximum is 18446744073709551615.
+      examples: ['42']
+    Role:
+      type: string
+      enum: [STUDENT, SUB_MANAGEMENT, MANAGEMENT, ADMIN]
+    DirectoryAccountStatus:
+      type: string
+      enum: [ACTIVE, DISABLED]
+    CurrentAuthorization:
+      type: object
+      additionalProperties: false
+      required: [userId, role]
+      properties:
+        userId:
+          $ref: '#/components/schemas/UserId'
+        role:
+          $ref: '#/components/schemas/Role'
+    UserSummary:
+      type: object
+      additionalProperties: false
+      required: [userId, firstName, lastName, role, accountStatus]
+      properties:
+        userId:
+          $ref: '#/components/schemas/UserId'
+        firstName:
+          type: [string, 'null']
+        lastName:
+          type: [string, 'null']
+        role:
+          $ref: '#/components/schemas/Role'
+        accountStatus:
+          $ref: '#/components/schemas/DirectoryAccountStatus'
+    UserPage:
+      type: object
+      additionalProperties: false
+      required: [items, nextCursor]
+      properties:
+        items:
+          type: array
+          maxItems: 100
+          items:
+            $ref: '#/components/schemas/UserSummary'
+        nextCursor:
+          description: Last returned ID when another page exists. Null on the final page.
+          oneOf:
+            - $ref: '#/components/schemas/UserId'
+            - type: 'null'
+    UserDetail:
+      type: object
+      additionalProperties: false
+      required: [userId, firstName, lastName, role, accountStatus, studentId, universityEmail, channel]
+      properties:
+        userId:
+          $ref: '#/components/schemas/UserId'
+        firstName:
+          type: [string, 'null']
+        lastName:
+          type: [string, 'null']
+        role:
+          $ref: '#/components/schemas/Role'
+        accountStatus:
+          $ref: '#/components/schemas/DirectoryAccountStatus'
+        studentId:
+          type: [string, 'null']
+        universityEmail:
+          type: [string, 'null']
+        channel:
+          oneOf:
+            - $ref: '#/components/schemas/ChannelSummary'
+            - type: 'null'
+    ChannelSummary:
+      type: object
+      additionalProperties: false
+      required: [channelId, name]
+      properties:
+        channelId:
+          type: string
+          pattern: '^[1-9][0-9]{0,19}$'
+        name:
+          type: string
+    Problem:
+      type: object
+      additionalProperties: false
+      required: [type, title, status, code, traceId]
+      properties:
+        type:
+          type: string
+          const: about:blank
+        title:
+          type: string
+        status:
+          type: integer
+          enum: [400, 401, 403, 404, 503]
+        code:
+          type: string
+          enum: [VALIDATION_FAILED, AUTHENTICATION_REQUIRED, ACCESS_DENIED, ACCOUNT_DISABLED,
+                 USER_NOT_FOUND, AUTH_STATE_UNAVAILABLE, DIRECTORY_UNAVAILABLE]
+        traceId:
+          type: string
+          format: uuid
+x-unispace-document-status: REVIEW ONLY
+x-unispace-open-decisions:
+  - Confirm the eligible account scope, returned fields and pagination defaults before final wire approval.
+  - Approve any search fields, matching behavior and limits before enabling directory search.
